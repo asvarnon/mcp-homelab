@@ -111,3 +111,35 @@ server.py              ← Entry point, thin @mcp.tool() wrappers
 Config schema uses `hosts` (not `nodes`) as the top-level key for SSH-reachable machines. Legacy configs with `nodes` are accepted with a deprecation warning.
 
 Each layer has one job. Tools call core. Core calls config. Config calls env. Read `docs/design-principles.md` for the full explanation.
+
+---
+
+## Security & Local Tooling
+
+This project gives AI agents SSH access to real infrastructure — security matters. The following protections are in place:
+
+### CI (automatic — runs on every push and PR)
+
+- **pytest** across Python 3.10–3.12
+- **gitleaks** secret scanning (full history)
+- **CodeQL** static analysis (GitHub-managed)
+- **Dependabot** weekly dependency and Actions version updates
+
+### Pre-commit hooks (optional — local only)
+
+Pre-commit runs checks before each `git commit`. It's opt-in per developer:
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+This enables local gitleaks scanning so secrets are caught before they ever reach a commit. If you skip this step, the CI gitleaks workflow still catches them on push.
+
+### What to keep out of commits
+
+- **`.env`** — secrets only. Already in `.gitignore`.
+- **`config.yaml`** — contains real IPs and hostnames. Already in `.gitignore`.
+- **`context/`** — generated infrastructure data. Already in `.gitignore`.
+
+If you're adding a new file that could contain sensitive data, add it to `.gitignore` before committing anything else.
