@@ -151,6 +151,11 @@ class TestDeployPublicKey:
         with pytest.raises(RuntimeError, match="Failed deploying public key"):
             deploy_public_key(client, "ssh-ed25519 KEY", "svc")
 
+    def test_raises_on_invalid_os_type(self) -> None:
+        client = MagicMock()
+        with pytest.raises(ValueError, match="Unsupported os_type"):
+            deploy_public_key(client, "ssh-ed25519 KEY", "svc", os_type="windows")  # type: ignore[arg-type]
+
 
 # ===========================================================================
 # TestApplyRole
@@ -316,6 +321,52 @@ class TestPrintManualInstructions:
         assert "sudoers" in output.lower() or "/etc/sudoers.d" in output
         assert "visudo" in output
 
+    def test_freebsd_uses_pw_useradd(self, capsys: pytest.CaptureFixture[str]) -> None:
+        role = RoleTemplate(name="test", description="test")
+        print_manual_instructions("myhost", "ssh-ed25519 KEY", role, "svc", os_type="freebsd")
+        output = capsys.readouterr().out
+        assert "pw useradd" in output
+
+    def test_linux_uses_useradd(self, capsys: pytest.CaptureFixture[str]) -> None:
+        role = RoleTemplate(name="test", description="test")
+        print_manual_instructions("myhost", "ssh-ed25519 KEY", role, "svc", os_type="linux")
+        output = capsys.readouterr().out
+        assert "useradd -m -s /bin/bash" in output
+
+    def test_step_numbers_sequential_with_groups_and_sudoers(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        role = RoleTemplate(
+            name="full",
+            description="test",
+            groups=["docker"],
+            sudoers=["/usr/bin/x"],
+        )
+        print_manual_instructions("h", "ssh-ed25519 K", role, "svc")
+        output = capsys.readouterr().out
+        # Steps should be 1, 2, 3 (groups), 4 (sudoers), 5 (test)
+        assert "1." in output
+        assert "2." in output
+        assert "3." in output
+        assert "4." in output
+        assert "5." in output
+
+    def test_step_numbers_sequential_without_groups(
+        self, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        role = RoleTemplate(
+            name="nogroups",
+            description="test",
+            sudoers=["/usr/bin/x"],
+        )
+        print_manual_instructions("h", "ssh-ed25519 K", role, "svc")
+        output = capsys.readouterr().out
+        # Steps: 1 (create), 2 (key), 3 (sudoers), 4 (test)
+        assert "1." in output
+        assert "2." in output
+        assert "3." in output
+        assert "4." in output
+
 
 # ===========================================================================
 # TestRunSshProvisioning
@@ -361,6 +412,19 @@ class TestRunSshProvisioning:
 
         with pytest.raises(FileNotFoundError, match="not found in config.yaml"):
             run_ssh_provisioning("bogus", manual=True)
+
+    @pytest.mark.parametrize("bad_name", ["root!", "MCP", "has space", "../evil", ""])
+    def test_raises_for_invalid_service_user(
+        self,
+        bad_name: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_dir = self._make_config(tmp_path)
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(config_dir))
+
+        with pytest.raises(ValueError, match="Invalid service_user"):
+            run_ssh_provisioning("testhost", manual=True, service_user=bad_name)
 
     @patch("mcp_homelab.setup.ssh_provisioning.upsert_node")
     @patch("mcp_homelab.setup.ssh_provisioning.generate_keypair")

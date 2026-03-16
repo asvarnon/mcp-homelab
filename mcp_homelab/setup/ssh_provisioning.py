@@ -15,14 +15,17 @@ from __future__ import annotations
 
 import io
 import platform
+import re
 import stat
 import sys
 from pathlib import Path
+from typing import Literal
 
 import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from core.config import HostConfig
 from mcp_homelab.setup.config_writer import upsert_node
 from mcp_homelab.setup.roles import RoleTemplate, get_role
 from mcp_homelab.setup.ssh_helpers import (
@@ -31,9 +34,8 @@ from mcp_homelab.setup.ssh_helpers import (
     run_command,
 )
 
-_SSH_TIMEOUT = 10
-
 _DEFAULT_KEY_DIR = Path.home() / ".mcp-homelab" / "keys"
+_SERVICE_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -105,23 +107,25 @@ def deploy_public_key(
     client: paramiko.SSHClient,
     public_key: str,
     service_user: str,
-    os_type: str = "linux",
+    os_type: Literal["linux", "freebsd"] = "linux",
 ) -> None:
     """Create the service account and deploy *public_key* on the remote host.
 
     Runs as the bootstrap (admin) user.  Uses ``useradd`` on Linux and
     ``pw useradd`` on FreeBSD.
     """
-    # Create the user (ignore error if already exists)
+    # Create the user (ignore: user may already exist)
     if os_type == "freebsd":
         create_cmd = (
             f"pw useradd {service_user} -m -s /bin/sh "
             f"-d /home/{service_user} 2>/dev/null || true"
         )
-    else:
+    elif os_type == "linux":
         create_cmd = (
             f"useradd -m -s /bin/bash {service_user} 2>/dev/null || true"
         )
+    else:
+        raise ValueError(f"Unsupported os_type: {os_type!r}")
     run_command(client, f"sudo {create_cmd}")
 
     # Deploy authorized_keys
@@ -232,16 +236,22 @@ def print_manual_instructions(
     public_key: str,
     role: RoleTemplate,
     service_user: str,
+    os_type: Literal["linux", "freebsd"] = "linux",
 ) -> None:
     """Print step-by-step commands for manual provisioning."""
     print(f"\n{'=' * 60}")
     print(f"Manual provisioning commands for: {hostname}")
     print(f"{'=' * 60}\n")
 
-    print("1. Create the service account:")
-    print(f"   sudo useradd -m -s /bin/bash {service_user}\n")
+    step = 1
+    print(f"{step}. Create the service account:")
+    if os_type == "freebsd":
+        print(f"   sudo pw useradd {service_user} -m -s /bin/sh -d /home/{service_user}\n")
+    else:
+        print(f"   sudo useradd -m -s /bin/bash {service_user}\n")
 
-    print("2. Deploy the SSH public key:")
+    step += 1
+    print(f"{step}. Deploy the SSH public key:")
     print(f"   sudo mkdir -p /home/{service_user}/.ssh")
     print(f"   echo '{public_key}' | sudo tee /home/{service_user}/.ssh/authorized_keys")
     print(f"   sudo chmod 700 /home/{service_user}/.ssh")
@@ -249,13 +259,14 @@ def print_manual_instructions(
     print(f"   sudo chown -R {service_user}:{service_user} /home/{service_user}/.ssh\n")
 
     if role.groups:
-        print("3. Add to groups:")
+        step += 1
+        print(f"{step}. Add to groups:")
         for group in role.groups:
             print(f"   sudo usermod -aG {group} {service_user}")
         print()
 
     if role.sudoers:
-        step = 4 if role.groups else 3
+        step += 1
         print(f"{step}. Write sudoers drop-in:")
         print("   sudo tee /etc/sudoers.d/mcp-homelab <<'EOF'")
         print(role.sudoers_file_content(service_user), end="")
@@ -263,7 +274,8 @@ def print_manual_instructions(
         print("   sudo chmod 440 /etc/sudoers.d/mcp-homelab")
         print("   sudo visudo -cf /etc/sudoers.d/mcp-homelab\n")
 
-    print("4. Test the connection from your workstation:")
+    step += 1
+    print(f"{step}. Test the connection from your workstation:")
     print(f"   ssh -i <private-key-path> {service_user}@<host-ip>\n")
 
 
@@ -295,6 +307,12 @@ def run_ssh_provisioning(
     if not bootstrap_user and not manual:
         raise ValueError(
             "Must specify either --bootstrap-user (automated) or --manual."
+        )
+
+    if not _SERVICE_USER_RE.match(service_user):
+        raise ValueError(
+            f"Invalid service_user: {service_user!r}. "
+            "Must match [a-z_][a-z0-9_-]* (lowercase, no spaces or special chars)."
         )
 
     # Resolve key directory
@@ -330,7 +348,7 @@ def run_ssh_provisioning(
     if manual:
         # ---- Manual mode ----
         if role:
-            print_manual_instructions(hostname, public_key, role, service_user)
+            print_manual_instructions(hostname, public_key, role, service_user, os_type=os_type)
         else:
             # Minimal instructions without role
             print_manual_instructions(
@@ -338,6 +356,7 @@ def run_ssh_provisioning(
                 public_key,
                 RoleTemplate(name="(none)", description="No role"),
                 service_user,
+                os_type=os_type,
             )
 
         # Update config.yaml with new ssh_user + ssh_key_path
@@ -345,8 +364,7 @@ def run_ssh_provisioning(
         print(f"Updated config.yaml: {hostname}.ssh_user = {service_user}")
         return
 
-    # ---- Automated mode ----
-    assert bootstrap_user is not None
+    # ---- Automated mode (bootstrap_user guaranteed non-None by guard above) ----
 
     # Get bootstrap credentials from config
     bootstrap_key = host_cfg.ssh_key_path
@@ -387,14 +405,12 @@ def run_ssh_provisioning(
 
 def _update_config(
     hostname: str,
-    host_cfg: object,
+    host_cfg: HostConfig,
     service_user: str,
     key_path: Path,
 ) -> None:
     """Update config.yaml with the new service account credentials."""
-    from core.config import HostConfig, get_config_dir
-
-    assert isinstance(host_cfg, HostConfig)
+    from core.config import get_config_dir
 
     config_path = get_config_dir() / "config.yaml"
 
