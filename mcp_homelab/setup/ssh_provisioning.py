@@ -43,15 +43,20 @@ _SERVICE_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]*$")
 # ---------------------------------------------------------------------------
 
 
-def _create_ed25519_key() -> paramiko.Ed25519Key:
-    """Generate a new ed25519 key using cryptography and return as paramiko key."""
+def _create_ed25519_key() -> tuple[bytes, paramiko.Ed25519Key]:
+    """Generate a new ed25519 key using cryptography.
+
+    Returns:
+        Tuple of (PEM private key bytes, paramiko Ed25519Key for pub extraction).
+    """
     priv = Ed25519PrivateKey.generate()
     pem = priv.private_bytes(
         serialization.Encoding.PEM,
         serialization.PrivateFormat.OpenSSH,
         serialization.NoEncryption(),
     )
-    return paramiko.Ed25519Key(file_obj=io.StringIO(pem.decode("utf-8")))
+    pkey = paramiko.Ed25519Key(file_obj=io.StringIO(pem.decode("utf-8")))
+    return pem, pkey
 
 
 def generate_keypair(key_path: Path, force: bool = False) -> Path:
@@ -78,8 +83,11 @@ def generate_keypair(key_path: Path, force: bool = False) -> Path:
 
     key_path.parent.mkdir(parents=True, exist_ok=True)
 
-    key = _create_ed25519_key()
-    key.write_private_key_file(str(key_path))
+    pem_bytes, key = _create_ed25519_key()
+
+    # Write private key PEM directly (paramiko's write_private_key_file
+    # is not implemented for Ed25519Key)
+    key_path.write_bytes(pem_bytes)
 
     # Set 0600 on POSIX (not enforceable on Windows)
     if platform.system() != "Windows":
@@ -364,7 +372,9 @@ def run_ssh_provisioning(
         print(f"Updated config.yaml: {hostname}.ssh_user = {service_user}")
         return
 
-    # ---- Automated mode (bootstrap_user guaranteed non-None by guard above) ----
+    # ---- Automated mode ----
+    if bootstrap_user is None:
+        raise ValueError("bootstrap_user is required for automated mode.")
 
     # Get bootstrap credentials from config
     bootstrap_key = host_cfg.ssh_key_path

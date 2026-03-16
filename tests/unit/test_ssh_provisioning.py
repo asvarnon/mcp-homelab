@@ -33,9 +33,10 @@ def _mock_create_key() -> tuple:
     mock_key = MagicMock()
     mock_key.get_name.return_value = "ssh-ed25519"
     mock_key.get_base64.return_value = "AAAA1234"
+    mock_pem = b"-----BEGIN OPENSSH PRIVATE KEY-----\nfake\n-----END OPENSSH PRIVATE KEY-----\n"
     patcher = patch(
         "mcp_homelab.setup.ssh_provisioning._create_ed25519_key",
-        return_value=mock_key,
+        return_value=(mock_pem, mock_key),
     )
     return patcher, mock_key
 
@@ -55,7 +56,8 @@ class TestGenerateKeypair:
             result = generate_keypair(key_path)
 
         assert result == key_path
-        mock_key.write_private_key_file.assert_called_once_with(str(key_path))
+        assert key_path.exists()
+        assert b"OPENSSH PRIVATE KEY" in key_path.read_bytes()
         pub_path = key_path.with_suffix(".pub")
         assert pub_path.exists()
         assert "ssh-ed25519 AAAA1234" in pub_path.read_text(encoding="utf-8")
@@ -84,7 +86,7 @@ class TestGenerateKeypair:
             result = generate_keypair(key_path, force=True)
 
         assert result == key_path
-        mock_key.write_private_key_file.assert_called_once()
+        assert b"OPENSSH PRIVATE KEY" in key_path.read_bytes()
 
 
 # ===========================================================================

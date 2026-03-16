@@ -158,6 +158,9 @@ def _cmd_setup(args: argparse.Namespace) -> None:
                 print(f"  - {s}")
             print(f"Read paths: {', '.join(role.read_paths) if role.read_paths else '(none)'}")
         else:
+            if not args.host:
+                print("Error: --host is required for provisioning.", file=sys.stderr)
+                sys.exit(2)
             from mcp_homelab.setup.ssh_provisioning import run_ssh_provisioning
             run_ssh_provisioning(
                 hostname=args.host,
@@ -208,7 +211,7 @@ def main() -> None:
     setup_sub.add_parser("opnsense", help="Configure OPNsense API connection")
 
     ssh_parser = setup_sub.add_parser("ssh", help="Provision SSH service account on a host")
-    ssh_parser.add_argument("--host", required=True, help="Host name from config.yaml")
+    ssh_parser.add_argument("--host", default=None, help="Host name from config.yaml (required except for --show-role)")
     ssh_parser.add_argument("--bootstrap-user", default=None, help="Existing SSH user for automated provisioning")
     ssh_parser.add_argument("--manual", action="store_true", help="Print manual provisioning commands instead of automating")
     ssh_parser.add_argument("--role", default=None, help="Role template to apply (gamehost, readonly, docker-host, proxmox-node, firewall)")
