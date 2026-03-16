@@ -1,0 +1,32 @@
+# Virtual environment
+.venv/
+
+# Secrets
+.env
+
+# User config (contains real IPs, hostnames, credentials)
+config.yaml
+
+# Generated context (user-specific infrastructure data)
+context/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime artifacts
+startup_err.txt
+
+# OS
+.DS_Store
+Thumbs.db

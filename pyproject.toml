@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68.0", "setuptools-scm>=8.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-homelab"
+version = "1.1.0"
+description = "MCP server that exposes homelab infrastructure tools to AI assistants"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "Austin Varnon"}
+]
+keywords = ["mcp", "homelab", "infrastructure", "ai", "claude", "copilot"]
+
+dependencies = [
+    "mcp>=1.0.0",
+    "paramiko>=3.4.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.6.0",
+    "ruamel.yaml>=0.18.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.scripts]
+mcp-homelab = "mcp_homelab.cli:main"
+
+[project.urls]
+Repository = "https://github.com/asvarnon/mcp-homelab"
+
+[tool.setuptools.packages.find]
+include = ["core*", "tools*", "mcp_homelab*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark a test as async",
+]
