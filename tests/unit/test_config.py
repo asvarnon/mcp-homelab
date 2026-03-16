@@ -41,6 +41,12 @@ class TestHostConfig:
         assert host.vlan is None
         assert host.description == ""
         assert host.type is None
+        assert host.os == "linux"
+
+    def test_rejects_invalid_os(self) -> None:
+        from pydantic import ValidationError
+        with pytest.raises(ValidationError, match="'linux'.*'freebsd'"):
+            HostConfig(hostname="test", ip="10.0.0.1", os="windows")  # type: ignore[arg-type]
 
     def test_full(self) -> None:
         host = HostConfig(

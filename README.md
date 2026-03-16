@@ -265,3 +265,9 @@ mcp-homelab/
 ├── pyproject.toml         # Package metadata + pytest config
 └── Dockerfile             # Container packaging
 ```
+
+## Future Updates
+
+- **Dockerfile packaging** — current Dockerfile is a stub; needs design work for stdio transport
+- **FreeBSD memory accuracy** — BSD memory reporting could include inactive/cached pages for more precise used-memory values
+- **Config validation warnings** — detect likely misconfigurations (e.g., `sudo_docker` without `docker`) at startup
