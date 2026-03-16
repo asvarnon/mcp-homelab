@@ -8,6 +8,7 @@ Provides subcommands:
     mcp-homelab setup client    — Configure an MCP client (Claude Desktop, VS Code)
     mcp-homelab setup proxmox   — Configure Proxmox VE API connection
     mcp-homelab setup opnsense  — Configure OPNsense API connection
+    mcp-homelab setup ssh       — Provision SSH service account on a host
 """
 
 from __future__ import annotations
@@ -145,8 +146,30 @@ def _cmd_setup(args: argparse.Namespace) -> None:
     elif sub == "opnsense":
         from mcp_homelab.setup.opnsense_setup import run_opnsense_setup
         run_opnsense_setup()
+    elif sub == "ssh":
+        if args.show_role:
+            from mcp_homelab.setup.roles import get_role
+            role = get_role(args.show_role)
+            print(f"Role: {role.name}")
+            print(f"Description: {role.description}")
+            print(f"Groups: {', '.join(role.groups) if role.groups else '(none)'}")
+            print(f"Sudoers rules: {len(role.sudoers)}")
+            for s in role.sudoers:
+                print(f"  - {s}")
+            print(f"Read paths: {', '.join(role.read_paths) if role.read_paths else '(none)'}")
+        else:
+            from mcp_homelab.setup.ssh_provisioning import run_ssh_provisioning
+            run_ssh_provisioning(
+                hostname=args.host,
+                bootstrap_user=args.bootstrap_user,
+                manual=args.manual,
+                role_name=args.role,
+                service_user=args.service_user,
+                key_dir=Path(args.key_dir) if args.key_dir else None,
+                force=args.force,
+            )
     else:
-        print("Usage: mcp-homelab setup {node,check,client,proxmox,opnsense}")
+        print("Usage: mcp-homelab setup {node,check,client,proxmox,opnsense,ssh}")
         sys.exit(1)
 
 
@@ -183,6 +206,16 @@ def main() -> None:
 
     setup_sub.add_parser("proxmox", help="Configure Proxmox VE API connection")
     setup_sub.add_parser("opnsense", help="Configure OPNsense API connection")
+
+    ssh_parser = setup_sub.add_parser("ssh", help="Provision SSH service account on a host")
+    ssh_parser.add_argument("--host", required=True, help="Host name from config.yaml")
+    ssh_parser.add_argument("--bootstrap-user", default=None, help="Existing SSH user for automated provisioning")
+    ssh_parser.add_argument("--manual", action="store_true", help="Print manual provisioning commands instead of automating")
+    ssh_parser.add_argument("--role", default=None, help="Role template to apply (gamehost, readonly, docker-host, proxmox-node, firewall)")
+    ssh_parser.add_argument("--service-user", default="mcp-homelab", help="Service account username (default: mcp-homelab)")
+    ssh_parser.add_argument("--key-dir", default=None, help="Directory for generated keypairs (default: ~/.mcp-homelab/keys/)")
+    ssh_parser.add_argument("--force", action="store_true", help="Overwrite existing keypair")
+    ssh_parser.add_argument("--show-role", metavar="ROLE", help="Display a role template and exit")
 
     args = parser.parse_args()
 
