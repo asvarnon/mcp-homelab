@@ -12,7 +12,7 @@ import re
 from typing import Any
 from typing_extensions import TypedDict
 
-from core.config import load_config
+from core.config import AppConfig, load_config
 from core.ssh import SSHManager
 
 
@@ -178,6 +178,168 @@ def _parse_disk_gb(lines: list[str]) -> list[FilesystemInfo]:
     return results
 
 
+# ---------------------------------------------------------------------------
+# FreeBSD parsers  (OPNsense / HardenedBSD)
+# ---------------------------------------------------------------------------
+
+def _parse_bsd_uptime(lines: list[str]) -> str:
+    """Extract uptime from FreeBSD ``uptime`` output.
+
+    Format: `` 3:45PM  up 11 days,  2:15, 1 user, load averages: ...``
+    Returns a string like ``up 11 days, 2:15``.
+    """
+    for line in lines:
+        m = re.search(r"up\s+(.+?),\s*\d+\s+user", line)
+        if m:
+            # Normalize internal whitespace (FreeBSD pads with extra spaces)
+            uptime_str = re.sub(r"\s+", " ", m.group(1).strip())
+            return f"up {uptime_str}"
+    return "unknown"
+
+
+def _parse_bsd_cpu_percent(lines: list[str]) -> float:
+    """Derive CPU usage % from ``vmstat 1 2`` output.
+
+    Takes the *last* data line (the 1-second sample) and reads
+    the last three columns: us, sy, id.
+    """
+    data_line: str | None = None
+    for line in lines:
+        parts = line.split()
+        # Skip header rows — data rows start with a digit
+        if parts and parts[0].isdigit():
+            data_line = line
+    if data_line is None:
+        return 0.0
+    cols = data_line.split()
+    if len(cols) >= 3:
+        try:
+            idle = float(cols[-1])
+            return round(100.0 - idle, 1)
+        except ValueError:
+            pass
+    return 0.0
+
+
+def _parse_bsd_memory_mb(lines: list[str]) -> tuple[int, int]:
+    """Return ``(used_mb, total_mb)`` from sysctl output.
+
+    Expects three lines from:
+        sysctl -n hw.physmem
+        sysctl -n vm.stats.vm.v_free_count
+        sysctl -n hw.pagesize
+    """
+    nums: list[int] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.isdigit():
+            nums.append(int(stripped))
+    if len(nums) >= 3:
+        physmem, free_pages, page_size = nums[0], nums[1], nums[2]
+        total_mb = physmem // (1024 * 1024)
+        free_mb = (free_pages * page_size) // (1024 * 1024)
+        return total_mb - free_mb, total_mb
+    if len(nums) >= 1:
+        # Fallback: only physmem available — report total, used=0
+        return 0, nums[0] // (1024 * 1024)
+    return 0, 0
+
+
+def _parse_bsd_disk_gb(lines: list[str]) -> list[FilesystemInfo]:
+    """Parse ``df -g`` output on FreeBSD.
+
+    Similar to Linux but values have no ``G`` suffix and the
+    percentage column is labelled ``Capacity``.
+    """
+    results: list[FilesystemInfo] = []
+    for line in lines:
+        parts = line.split()
+        # Expect: Filesystem 1G-blocks Used Avail Capacity Mounted on
+        if len(parts) < 6:
+            continue
+        # Skip header and virtual filesystems
+        if parts[0] == "Filesystem" or parts[0] in _SKIP_FS_TYPES:
+            continue
+        if parts[0].startswith("tmpfs") or parts[0] == "devfs":
+            continue
+        try:
+            total = int(parts[1])
+            used = int(parts[2])
+            avail = int(parts[3])
+        except ValueError:
+            continue
+        results.append({
+            "filesystem": parts[0],
+            "mount": parts[5],
+            "total_gb": total,
+            "used_gb": used,
+            "available_gb": avail,
+            "use_percent": parts[4],
+        })
+    return results
+
+
+def _parse_bsd_cpu_info(lines: list[str]) -> CpuInfo:
+    """Extract CPU details from FreeBSD sysctl output.
+
+    Expects output from:
+        sysctl -n hw.model
+        sysctl -n hw.ncpu
+        sysctl -n hw.machine
+    (three lines, one value per line)
+    """
+    model = lines[0].strip() if len(lines) > 0 else "unknown"
+    cores = int(lines[1].strip()) if len(lines) > 1 and lines[1].strip().isdigit() else 0
+    arch = lines[2].strip() if len(lines) > 2 else "unknown"
+    return CpuInfo(
+        cpu_model=model,
+        cpu_cores=cores,
+        cpu_sockets=1,  # FreeBSD sysctl doesn't expose socket count; 1 is safe for homelab appliances
+        architecture=arch,
+    )
+
+
+def _parse_bsd_physmem(lines: list[str]) -> int:
+    """Extract total RAM in MB from ``sysctl -n hw.physmem`` output."""
+    for line in lines:
+        stripped = line.strip()
+        if stripped.isdigit():
+            return int(stripped) // (1024 * 1024)
+    return 0
+
+
+def _parse_bsd_disks(lines: list[str]) -> list[DiskInfo]:
+    """Extract disk names from ``sysctl -n kern.disks``.
+
+    Returns basic disk info — FreeBSD doesn't provide model/size
+    via this interface without geom parsing.
+    """
+    disks: list[DiskInfo] = []
+    for line in lines:
+        for name in line.split():
+            name = name.strip()
+            if name:
+                disks.append({"name": name, "size": "", "model": ""})
+    return disks
+
+
+_cached_config: AppConfig | None = None
+
+
+def _get_config() -> AppConfig:
+    """Return cached AppConfig, loading once on first call."""
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = load_config()
+    return _cached_config
+
+
+def _get_host_os(hostname: str) -> str:
+    """Look up the configured OS for a host. Defaults to 'linux'."""
+    host = _get_config().hosts.get(hostname)
+    return host.os if host else "linux"
+
+
 def _extract_label(labels: str, key: str) -> str:
     """Extract a specific label value from Docker's comma-separated labels string."""
     prefix = key + "="
@@ -237,6 +399,29 @@ async def list_nodes() -> list[NodeSummary]:
 
 async def get_node_status(hostname: str) -> NodeStatus:
     """Return uptime, CPU%, RAM usage, and disk usage for a node."""
+    host_os = _get_host_os(hostname)
+
+    if host_os == "freebsd":
+        commands = [
+            "uptime",
+            "vmstat 1 2",
+            "(sysctl -n hw.physmem; sysctl -n vm.stats.vm.v_free_count; sysctl -n hw.pagesize)",
+            "df -g",
+        ]
+        sections = await _compound_ssh_query(hostname, commands)
+        padded = sections + [[] for _ in range(len(commands) - len(sections))]
+        uptime_lines, cpu_lines, mem_lines, disk_lines = padded[:4]
+
+        ram_used, ram_total = _parse_bsd_memory_mb(mem_lines)
+        return {
+            "uptime": _parse_bsd_uptime(uptime_lines),
+            "cpu_percent": _parse_bsd_cpu_percent(cpu_lines),
+            "ram_used_mb": ram_used,
+            "ram_total_mb": ram_total,
+            "filesystems": _parse_bsd_disk_gb(disk_lines),
+        }
+
+    # Linux (default)
     commands = ["uptime -p", "top -bn1 | grep '%Cpu'", "free -m | grep '^Mem:'", "df -BG"]
     sections = await _compound_ssh_query(hostname, commands)
 
@@ -426,6 +611,37 @@ def _round_to_consumer_gb(total_mb: int) -> int:
 
 async def get_hardware_specs(hostname: str) -> HardwareSpecs:
     """Return hardware specification for a node."""
+    host_os = _get_host_os(hostname)
+
+    if host_os == "freebsd":
+        commands = [
+            "(sysctl -n hw.model; sysctl -n hw.ncpu; sysctl -n hw.machine)",
+            "sysctl -n hw.physmem",
+            "sysctl -n kern.disks",
+            "(sysctl -n kern.vm_guest 2>/dev/null || echo none)",
+        ]
+        sections = await _compound_ssh_query(hostname, commands)
+        padded = sections + [[] for _ in range(len(commands) - len(sections))]
+        cpu_lines, mem_lines, disk_lines, virt_lines = padded[:4]
+
+        cpu_info = _parse_bsd_cpu_info(cpu_lines)
+        virt_type = _parse_virt(virt_lines)
+        ram_total = _parse_bsd_physmem(mem_lines)
+
+        return HardwareSpecs(
+            cpu_model=cpu_info["cpu_model"],
+            cpu_cores=cpu_info["cpu_cores"],
+            cpu_sockets=cpu_info["cpu_sockets"],
+            architecture=cpu_info["architecture"],
+            ram_total_mb=ram_total,
+            ram_display=f"{_round_to_consumer_gb(ram_total)} GB",
+            memory_modules=[],  # dmidecode not attempted (may exist on OPNsense but not queried)
+            disks=_parse_bsd_disks(disk_lines),
+            virtualization=virt_type,
+            is_vm=virt_type != "none",
+        )
+
+    # Linux (default)
     commands = [
         "lscpu",
         "cat /proc/meminfo | head -5",

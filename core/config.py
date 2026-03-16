@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple
 
 import warnings
 
@@ -28,6 +28,7 @@ class HostConfig(BaseModel):
     sudo_docker: bool = False
     description: str = ""
     type: str | None = None  # optional: baremetal, vm, container
+    os: Literal["linux", "freebsd"] = "linux"
 
 
 # Backward-compatible alias — existing code that imports NodeConfig still works.

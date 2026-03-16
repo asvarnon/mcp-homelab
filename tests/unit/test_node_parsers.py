@@ -15,6 +15,13 @@ import pytest
 # In Java terms: testing package-private helpers via same-package test class.
 from tools.nodes import (
     _extract_label,
+    _parse_bsd_cpu_info,
+    _parse_bsd_cpu_percent,
+    _parse_bsd_disk_gb,
+    _parse_bsd_disks,
+    _parse_bsd_memory_mb,
+    _parse_bsd_physmem,
+    _parse_bsd_uptime,
     _parse_cpu_percent,
     _parse_disk_gb,
     _parse_dmidecode,
@@ -449,3 +456,234 @@ class TestRoundToConsumerGb:
 
     def test_negative(self) -> None:
         assert _round_to_consumer_gb(-1) == 0
+
+
+# ===========================================================================
+# FreeBSD parsers
+# ===========================================================================
+
+
+class TestParseBsdUptime:
+    def test_days_and_hours(self) -> None:
+        lines = [" 3:45PM  up 11 days,  2:15, 1 user, load averages: 0.15, 0.10, 0.08"]
+        assert _parse_bsd_uptime(lines) == "up 11 days, 2:15"
+
+    def test_hours_only(self) -> None:
+        lines = ["10:00AM  up  5:30, 2 users, load averages: 0.01, 0.02, 0.00"]
+        assert _parse_bsd_uptime(lines) == "up 5:30"
+
+    def test_single_day(self) -> None:
+        lines = [" 1:00PM  up 1 day,  0:45, 1 user, load averages: 0.00, 0.00, 0.00"]
+        assert _parse_bsd_uptime(lines) == "up 1 day, 0:45"
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_uptime([]) == "unknown"
+
+    def test_no_match(self) -> None:
+        assert _parse_bsd_uptime(["not uptime output"]) == "unknown"
+
+
+class TestParseBsdCpuPercent:
+    def test_standard_vmstat(self) -> None:
+        """Last three columns: us=2, sy=1, id=97 → 3.0% used."""
+        lines = [
+            " procs      memory      page                    disks     faults         cpu",
+            " r b w     avm    fre   flt  re  pi  po    fr  sr da0   in   sy   cs us sy id",
+            " 0 0 0  123456 789012     0   0   0   0     0   0   0    3   12   15  1  0 99",
+            " 0 0 0  123456 789012     0   0   0   0     0   0   0    5   20   25  2  1 97",
+        ]
+        assert _parse_bsd_cpu_percent(lines) == 3.0
+
+    def test_high_usage(self) -> None:
+        lines = [
+            " r b w     avm    fre",
+            " 0 0 0  123456 789012     0   0   0   0     0   0   0    5   20   25 40 10 50",
+        ]
+        assert _parse_bsd_cpu_percent(lines) == 50.0
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_cpu_percent([]) == 0.0
+
+    def test_no_data_lines(self) -> None:
+        lines = [" procs memory page", " r b w avm fre"]
+        assert _parse_bsd_cpu_percent(lines) == 0.0
+
+
+class TestParseBsdMemoryMb:
+    def test_standard_sysctl(self) -> None:
+        """16 GB physmem, some free pages, 4K page size."""
+        physmem = 16803807232  # ~16 GB
+        free_pages = 2000000
+        page_size = 4096
+        lines = [str(physmem), str(free_pages), str(page_size)]
+        used, total = _parse_bsd_memory_mb(lines)
+        assert total == physmem // (1024 * 1024)
+        expected_free = (free_pages * page_size) // (1024 * 1024)
+        assert used == total - expected_free
+
+    def test_physmem_only_fallback(self) -> None:
+        """If only physmem is available, used=0."""
+        lines = ["16803807232"]
+        used, total = _parse_bsd_memory_mb(lines)
+        assert total == 16803807232 // (1024 * 1024)
+        assert used == 0
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_memory_mb([]) == (0, 0)
+
+
+class TestParseBsdDiskGb:
+    def test_standard_freebsd_df(self) -> None:
+        lines = [
+            "Filesystem  1G-blocks  Used  Avail Capacity  Mounted on",
+            "/dev/gpt/rootfs     100    20     75       21%    /",
+        ]
+        result = _parse_bsd_disk_gb(lines)
+        assert len(result) == 1
+        assert result[0]["filesystem"] == "/dev/gpt/rootfs"
+        assert result[0]["total_gb"] == 100
+        assert result[0]["used_gb"] == 20
+        assert result[0]["available_gb"] == 75
+        assert result[0]["use_percent"] == "21%"
+        assert result[0]["mount"] == "/"
+
+    def test_skips_devfs(self) -> None:
+        lines = [
+            "devfs               0    0     0   100%    /dev",
+            "/dev/ada0p2       100   20    75    21%    /",
+        ]
+        result = _parse_bsd_disk_gb(lines)
+        assert len(result) == 1
+        assert result[0]["filesystem"] == "/dev/ada0p2"
+
+    def test_skips_tmpfs(self) -> None:
+        lines = ["tmpfs      8    0     8   0%    /tmp"]
+        assert _parse_bsd_disk_gb(lines) == []
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_disk_gb([]) == []
+
+
+class TestParseBsdCpuInfo:
+    def test_standard_sysctl(self) -> None:
+        lines = [
+            "Intel(R) Celeron(R) J4125 CPU @ 2.00GHz",
+            "4",
+            "amd64",
+        ]
+        result = _parse_bsd_cpu_info(lines)
+        assert result["cpu_model"] == "Intel(R) Celeron(R) J4125 CPU @ 2.00GHz"
+        assert result["cpu_cores"] == 4
+        assert result["cpu_sockets"] == 1
+        assert result["architecture"] == "amd64"
+
+    def test_empty_input(self) -> None:
+        result = _parse_bsd_cpu_info([])
+        assert result["cpu_model"] == "unknown"
+        assert result["cpu_cores"] == 0
+        assert result["architecture"] == "unknown"
+
+
+class TestParseBsdPhysmem:
+    def test_standard_output(self) -> None:
+        lines = ["16803807232"]
+        assert _parse_bsd_physmem(lines) == 16803807232 // (1024 * 1024)
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_physmem([]) == 0
+
+
+class TestParseBsdDisks:
+    def test_single_line(self) -> None:
+        lines = ["ada0 ada1 nvd0"]
+        result = _parse_bsd_disks(lines)
+        assert len(result) == 3
+        assert result[0]["name"] == "ada0"
+        assert result[1]["name"] == "ada1"
+        assert result[2]["name"] == "nvd0"
+
+    def test_empty_input(self) -> None:
+        assert _parse_bsd_disks([]) == []
+
+    def test_blank_lines(self) -> None:
+        lines = ["", "ada0", ""]
+        result = _parse_bsd_disks(lines)
+        assert len(result) == 1
+        assert result[0]["name"] == "ada0"
+
+
+# ===========================================================================
+# FreeBSD dispatch integration tests
+# ===========================================================================
+
+
+class TestGetNodeStatusFreebsd:
+    """Verify get_node_status() takes the FreeBSD path when os='freebsd'."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_ssh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Stub _get_host_os and _compound_ssh_query for FreeBSD path."""
+        from tools import nodes
+
+        monkeypatch.setattr(nodes, "_get_host_os", lambda _: "freebsd")
+
+        # Four sections matching: uptime, vmstat, sysctl mem, df -g
+        async def fake_query(hostname: str, commands: list[str], **kw: object) -> list[list[str]]:
+            return [
+                [" 3:45PM  up 2 days,  1:30, 1 user, load averages: 0.10, 0.05, 0.01"],
+                [
+                    " procs memory page disks faults cpu",
+                    " r b w avm fre",
+                    " 0 0 0 100 200  0 0 0 0 0 0 0  5 10 15 3 2 95",
+                ],
+                ["8589934592", "1000000", "4096"],
+                [
+                    "Filesystem 1G-blocks Used Avail Capacity Mounted on",
+                    "/dev/ada0p2      100   20    75    21%    /",
+                ],
+            ]
+
+        monkeypatch.setattr(nodes, "_compound_ssh_query", fake_query)
+
+    async def test_returns_bsd_status(self) -> None:
+        from tools.nodes import get_node_status
+
+        result = await get_node_status("opnsense")
+        assert result["uptime"] == "up 2 days, 1:30"
+        assert result["cpu_percent"] == 5.0
+        assert result["ram_total_mb"] == 8589934592 // (1024 * 1024)
+        assert len(result["filesystems"]) == 1
+        assert result["filesystems"][0]["mount"] == "/"
+
+
+class TestGetHardwareSpecsFreebsd:
+    """Verify get_hardware_specs() takes the FreeBSD path when os='freebsd'."""
+
+    @pytest.fixture(autouse=True)
+    def _stub_ssh(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from tools import nodes
+
+        monkeypatch.setattr(nodes, "_get_host_os", lambda _: "freebsd")
+
+        # Four sections: cpu sysctl, physmem, kern.disks, kern.vm_guest
+        async def fake_query(hostname: str, commands: list[str], **kw: object) -> list[list[str]]:
+            return [
+                ["Intel(R) Celeron(R) J4125 CPU @ 2.00GHz", "4", "amd64"],
+                ["8589934592"],
+                ["ada0 ada1"],
+                ["none"],
+            ]
+
+        monkeypatch.setattr(nodes, "_compound_ssh_query", fake_query)
+
+    async def test_returns_bsd_specs(self) -> None:
+        from tools.nodes import get_hardware_specs
+
+        result = await get_hardware_specs("opnsense")
+        assert result["cpu_model"] == "Intel(R) Celeron(R) J4125 CPU @ 2.00GHz"
+        assert result["cpu_cores"] == 4
+        assert result["architecture"] == "amd64"
+        assert result["ram_total_mb"] == 8589934592 // (1024 * 1024)
+        assert len(result["disks"]) == 2
+        assert result["memory_modules"] == []
+        assert result["is_vm"] is False

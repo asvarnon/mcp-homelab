@@ -18,6 +18,7 @@ hosts:
   #   sudo_docker: false
   #   description: "My Linux server"
   #   type: baremetal  # optional: baremetal, vm, container
+  #   os: linux        # optional: linux (default) or freebsd
 
 # Optional — remove or leave commented if you don't use Proxmox.
 # proxmox:
