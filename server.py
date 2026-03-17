@@ -116,7 +116,7 @@ async def stop_lxc(vmid: int) -> str:
     return await proxmox.stop_lxc(vmid)
 
 
-# Parameters must match tools.proxmox.create_lxc — keep in sync
+# Subset of tools.proxmox.create_lxc params — password intentionally excluded from MCP surface
 @mcp.tool()
 async def create_lxc(
     node: str,

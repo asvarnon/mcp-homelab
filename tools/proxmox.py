@@ -393,12 +393,12 @@ async def create_lxc(
     if vlan_tag is not None and not (1 <= vlan_tag <= 4094):
         raise ValueError(f"vlan_tag must be in range 1-4094 when set, got {vlan_tag}")
 
-    if storage is None:
+    if storage is None or bridge is None:
         cfg = get_proxmox_config()
-        storage = cfg.default_storage if cfg else "local-lvm"
-    if bridge is None:
-        cfg = get_proxmox_config()
-        bridge = cfg.default_bridge if cfg else "vmbr0"
+        if storage is None:
+            storage = cfg.default_storage if cfg else "local-lvm"
+        if bridge is None:
+            bridge = cfg.default_bridge if cfg else "vmbr0"
 
     if vmid is None:
         next_id = await get_next_vmid()
