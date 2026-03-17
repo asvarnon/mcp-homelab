@@ -68,6 +68,10 @@ Tools call core. Core calls config. Config calls env. Don't skip layers.
 - Tests that require real SSH/API connections instead of mocking
 - `Optional[X]` or `List[X]` instead of `X | None` or `list[X]`
 
+## TypedDict Union Pitfall
+
+Do **not** use a TypedDict in union return types for error branches (e.g. `VmStatus | ProxmoxError`). Pylance/Pyright cannot narrow TypedDict unions — callers get errors accessing keys that exist on one branch but not the other. Since MCP tool returns are consumed as JSON by an LLM (not by typed Python callers), use `| dict` for error branches and keep a plain `dict[str, str]` sentinel like `_NOT_CONFIGURED`. Reserve strict TypedDict unions for cases where Python callers will actually narrow the type.
+
 ## FreeBSD/Linux Dual Support
 
 The `HostConfig.os` field (`Literal["linux", "freebsd"]`) controls command dispatch. When reviewing changes to `tools/nodes.py`:

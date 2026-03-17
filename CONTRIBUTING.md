@@ -141,5 +141,36 @@ This enables local gitleaks scanning so secrets are caught before they ever reac
 - **`.env`** — secrets only. Already in `.gitignore`.
 - **`config.yaml`** — contains real IPs and hostnames. Already in `.gitignore`.
 - **`context/`** — generated infrastructure data. Already in `.gitignore`.
+- **`tests/integration/`** — integration tests that hit real infrastructure. Already in `.gitignore`.
 
 If you're adding a new file that could contain sensitive data, add it to `.gitignore` before committing anything else.
+
+---
+
+## Integration Testing
+
+Unit tests in `tests/unit/` use monkeypatch and mock data — they never touch real infrastructure. Integration tests are different: they make real API calls and SSH connections against your personal homelab.
+
+Because integration tests contain environment-specific details (node names, storage pools, VLAN tags, templates), the entire `tests/integration/` directory is gitignored. Each developer writes their own integration tests locally.
+
+### Writing an integration test
+
+1. Create your test in `tests/integration/` (e.g. `test_lxc_integration.py`)
+2. Call `load_env()` before any tool calls — this loads your `.env` credentials
+3. Use the real tool functions from `tools/` (not mocks)
+4. Include confirmation prompts before destructive operations (creating/deleting resources)
+5. Always include a cleanup step
+
+### Running integration tests
+
+```bash
+# Integration tests are gitignored — they won't exist in CI or cloned repos
+# Run them explicitly:
+python tests/integration/test_lxc_integration.py
+```
+
+### What you need
+
+- A working `config.yaml` with your infrastructure details
+- A `.env` file with valid API tokens / credentials
+- Network access to the target systems (Proxmox, OPNsense, SSH hosts)

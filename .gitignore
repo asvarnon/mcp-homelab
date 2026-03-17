@@ -24,6 +24,9 @@ build/
 *.swp
 *.swo
 
+# Integration tests (contain real infrastructure details — local only)
+tests/integration/
+
 # Runtime artifacts
 startup_err.txt
 
