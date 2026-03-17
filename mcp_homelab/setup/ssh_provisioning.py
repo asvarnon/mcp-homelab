@@ -36,6 +36,7 @@ from mcp_homelab.setup.ssh_helpers import (
 
 _DEFAULT_KEY_DIR = Path.home() / ".mcp-homelab" / "keys"
 _SERVICE_USER_RE = re.compile(r"^[a-z_][a-z0-9_-]*$")
+_HOSTNAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 
 # ---------------------------------------------------------------------------
@@ -158,23 +159,33 @@ def apply_role(
     client: paramiko.SSHClient,
     role: RoleTemplate,
     service_user: str,
+    os_type: Literal["linux", "freebsd"] = "linux",
 ) -> None:
     """Apply role permissions on the remote host.
 
     Adds the service user to required groups and writes a sudoers
     drop-in file validated with ``visudo -cf``.
+
+    On FreeBSD, uses ``pw groupmod`` instead of ``usermod``.
     """
     # Add to groups
     for group in role.groups:
-        result = run_command(
-            client,
-            f"sudo usermod -aG {group} {service_user}",
-        )
+        if os_type == "freebsd":
+            cmd = f"sudo pw groupmod {group} -m {service_user}"
+        elif os_type == "linux":
+            cmd = f"sudo usermod -aG {group} {service_user}"
+        else:
+            raise ValueError(f"Unsupported os_type: {os_type!r}")
+        result = run_command(client, cmd)
         if result.exit_code != 0:
             raise RuntimeError(
                 f"Failed to add {service_user} to group {group}: "
                 f"{result.stderr}"
             )
+
+    # Skip sudoers write when the role has no sudoers rules
+    if not role.sudoers:
+        return
 
     # Write sudoers drop-in
     sudoers_content = role.sudoers_file_content(service_user)
@@ -227,11 +238,15 @@ def verify_connection(ip: str, service_user: str, key_path: Path) -> bool:
     """
     try:
         client = connect(ip, service_user, str(key_path))
-        result = run_command(client, "echo ok")
-        client.close()
-        return result.exit_code == 0 and result.stdout.strip() == "ok"
     except SSHConnectError:
         return False
+    try:
+        result = run_command(client, "echo ok")
+        return result.exit_code == 0 and result.stdout.strip() == "ok"
+    except Exception:
+        return False
+    finally:
+        client.close()
 
 
 # ---------------------------------------------------------------------------
@@ -309,7 +324,7 @@ def run_ssh_provisioning(
 
     Raises:
         ValueError: If neither ``bootstrap_user`` nor ``manual`` is set.
-        KeyError: If *role_name* is not a valid built-in role.
+        ValueError: If *role_name* is not a valid built-in role.
         FileNotFoundError: If *hostname* is not in ``config.yaml``.
     """
     if not bootstrap_user and not manual:
@@ -321,6 +336,13 @@ def run_ssh_provisioning(
         raise ValueError(
             f"Invalid service_user: {service_user!r}. "
             "Must match [a-z_][a-z0-9_-]* (lowercase, no spaces or special chars)."
+        )
+
+    # Validate hostname before using as a filename (prevent path traversal)
+    if not _HOSTNAME_RE.match(hostname):
+        raise ValueError(
+            f"Invalid hostname: {hostname!r}. "
+            "Must be alphanumeric with hyphens/underscores, no path separators."
         )
 
     # Resolve key directory
@@ -393,7 +415,7 @@ def run_ssh_provisioning(
 
         if role:
             print(f"Applying role: {role.name}")
-            apply_role(client, role, service_user)
+            apply_role(client, role, service_user, os_type=os_type)
     finally:
         client.close()
 

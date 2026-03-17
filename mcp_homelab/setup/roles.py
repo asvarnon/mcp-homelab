@@ -118,11 +118,11 @@ def get_role(name: str) -> RoleTemplate:
         The matching RoleTemplate.
 
     Raises:
-        KeyError: If no built-in role matches.
+        ValueError: If no built-in role matches.
     """
     if name not in BUILT_IN_ROLES:
         available = ", ".join(sorted(BUILT_IN_ROLES))
-        raise KeyError(f"Unknown role: {name!r}. Available: {available}")
+        raise ValueError(f"Unknown role: {name!r}. Available: {available}")
     return BUILT_IN_ROLES[name]
 
 

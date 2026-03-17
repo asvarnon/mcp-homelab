@@ -143,12 +143,12 @@ class TestGetRole:
             role = get_role(name)
             assert role.name == name
 
-    def test_invalid_lookup_raises_key_error(self) -> None:
-        with pytest.raises(KeyError, match="Unknown role"):
+    def test_invalid_lookup_raises_value_error(self) -> None:
+        with pytest.raises(ValueError, match="Unknown role"):
             get_role("nonexistent")
 
     def test_error_message_lists_available_roles(self) -> None:
-        with pytest.raises(KeyError, match="Available:"):
+        with pytest.raises(ValueError, match="Available:"):
             get_role("bogus")
 
 

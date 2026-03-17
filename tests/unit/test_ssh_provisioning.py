@@ -94,11 +94,6 @@ class TestGenerateKeypair:
 # ===========================================================================
 
 
-def _mock_run_command_success(client: MagicMock, cmd: str) -> CommandResult:
-    """Stub run_command that always succeeds."""
-    return CommandResult(exit_code=0, stdout="", stderr="")
-
-
 class TestDeployPublicKey:
     """Tests for deploy_public_key() — mock SSH client."""
 
@@ -183,6 +178,40 @@ class TestApplyRole:
         cmds = [c[0][1] for c in mock_run.call_args_list]
         assert any("usermod -aG docker svc" in cmd for cmd in cmds)
         assert any("usermod -aG adm svc" in cmd for cmd in cmds)
+
+    @patch("mcp_homelab.setup.ssh_provisioning.run_command")
+    def test_freebsd_adds_to_groups(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = CommandResult(0, "", "")
+        client = MagicMock()
+        role = RoleTemplate(
+            name="test",
+            description="test",
+            groups=["docker"],
+            sudoers=[],
+        )
+
+        apply_role(client, role, "svc", os_type="freebsd")
+
+        cmds = [c[0][1] for c in mock_run.call_args_list]
+        assert any("pw groupmod docker -m svc" in cmd for cmd in cmds)
+
+    @patch("mcp_homelab.setup.ssh_provisioning.run_command")
+    def test_skips_sudoers_when_empty(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = CommandResult(0, "", "")
+        client = MagicMock()
+        role = RoleTemplate(
+            name="readonly",
+            description="no sudo",
+            groups=["adm"],
+            sudoers=[],
+        )
+
+        apply_role(client, role, "svc")
+
+        cmds = [c[0][1] for c in mock_run.call_args_list]
+        # Only group add, no sudoers tee/visudo/mv
+        assert not any("tee" in cmd for cmd in cmds)
+        assert not any("visudo" in cmd for cmd in cmds)
 
     @patch("mcp_homelab.setup.ssh_provisioning.run_command")
     def test_writes_sudoers_and_validates(self, mock_run: MagicMock) -> None:
@@ -276,6 +305,21 @@ class TestVerifyConnection:
         result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
 
         assert result is False
+        mock_client.close.assert_called_once()
+
+    @patch("mcp_homelab.setup.ssh_provisioning.run_command")
+    @patch("mcp_homelab.setup.ssh_provisioning.connect")
+    def test_run_command_exception_closes_client(
+        self, mock_connect: MagicMock, mock_run: MagicMock,
+    ) -> None:
+        mock_client = MagicMock()
+        mock_connect.return_value = mock_client
+        mock_run.side_effect = RuntimeError("SSH timeout")
+
+        result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
+
+        assert result is False
+        mock_client.close.assert_called_once()
 
 
 # ===========================================================================
@@ -427,6 +471,19 @@ class TestRunSshProvisioning:
 
         with pytest.raises(ValueError, match="Invalid service_user"):
             run_ssh_provisioning("testhost", manual=True, service_user=bad_name)
+
+    @pytest.mark.parametrize("bad_host", ["../etc/passwd", "/absolute", "has space", "a/b"])
+    def test_raises_for_path_traversal_hostname(
+        self,
+        bad_host: str,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        config_dir = self._make_config(tmp_path)
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(config_dir))
+
+        with pytest.raises(ValueError, match="Invalid hostname"):
+            run_ssh_provisioning(bad_host, manual=True)
 
     @patch("mcp_homelab.setup.ssh_provisioning.upsert_node")
     @patch("mcp_homelab.setup.ssh_provisioning.generate_keypair")
