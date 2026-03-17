@@ -81,10 +81,6 @@ class TemplateInfo(TypedDict):
     size_mb: float
 
 
-class ProxmoxError(TypedDict):
-    error: str
-
-
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
@@ -94,9 +90,9 @@ _BYTES_PER_GB = 1024 ** 3   # 1_073_741_824
 
 _client = ProxmoxClient()
 
-_NOT_CONFIGURED = ProxmoxError(
-    error="Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env."
-)
+_NOT_CONFIGURED: dict[str, str] = {
+    "error": "Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env.",
+}
 
 
 # ---------------------------------------------------------------------------
