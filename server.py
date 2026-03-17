@@ -88,6 +88,92 @@ async def stop_vm(vmid: int) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Proxmox LXC tools (REST API)
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+async def list_lxc() -> list[proxmox.LxcSummary] | list[dict]:
+    """List all LXC containers on the Proxmox hypervisor with status and resource info."""
+    return await proxmox.list_lxc()
+
+
+@mcp.tool()
+async def get_lxc_status(vmid: int) -> proxmox.LxcStatus | dict:
+    """Get detailed status for a specific Proxmox LXC container."""
+    return await proxmox.get_lxc_status(vmid)
+
+
+@mcp.tool()
+async def start_lxc(vmid: int) -> str:
+    """Start a stopped Proxmox LXC container."""
+    return await proxmox.start_lxc(vmid)
+
+
+@mcp.tool()
+async def stop_lxc(vmid: int) -> str:
+    """Gracefully stop a running Proxmox LXC container."""
+    return await proxmox.stop_lxc(vmid)
+
+
+@mcp.tool()
+async def create_lxc(
+    node: str,
+    ostemplate: str,
+    hostname: str | None = None,
+    vmid: int | None = None,
+    cores: int = 1,
+    memory_mb: int = 512,
+    swap_mb: int = 512,
+    disk_gb: int = 4,
+    storage: str = "local-lvm",
+    bridge: str = "vmbr0",
+    vlan_tag: int | None = None,
+    ip_config: str = "ip=dhcp",
+    ssh_public_key: str | None = None,
+    unprivileged: bool = True,
+    start_after_create: bool = False,
+    password: str | None = None,
+) -> proxmox.LxcCreateResult | dict:
+    """Create a new LXC container on Proxmox. Use list_templates and list_storage to discover valid ostemplate and storage values first."""
+    return await proxmox.create_lxc(
+        node=node,
+        ostemplate=ostemplate,
+        hostname=hostname,
+        vmid=vmid,
+        cores=cores,
+        memory_mb=memory_mb,
+        swap_mb=swap_mb,
+        disk_gb=disk_gb,
+        storage=storage,
+        bridge=bridge,
+        vlan_tag=vlan_tag,
+        ip_config=ip_config,
+        ssh_public_key=ssh_public_key,
+        unprivileged=unprivileged,
+        start_after_create=start_after_create,
+        password=password,
+    )
+
+
+@mcp.tool()
+async def get_next_vmid() -> int | dict:
+    """Get the next available VM/CT ID from the Proxmox cluster."""
+    return await proxmox.get_next_vmid()
+
+
+@mcp.tool()
+async def list_storage(node: str | None = None) -> list[proxmox.StorageInfo] | list[dict]:
+    """List available storage on a Proxmox node with capacity info."""
+    return await proxmox.list_storage(node)
+
+
+@mcp.tool()
+async def list_templates(node: str | None = None, storage: str | None = None) -> list[proxmox.TemplateInfo] | list[dict]:
+    """List available OS templates for LXC container creation on a Proxmox node."""
+    return await proxmox.list_templates(node, storage)
+
+
+# ---------------------------------------------------------------------------
 # OPNsense tools (REST API)
 # ---------------------------------------------------------------------------
 
