@@ -353,7 +353,10 @@ async def create_lxc(
         memory_mb: RAM in megabytes.
         swap_mb: Swap in megabytes.
         disk_gb: Root disk size in gigabytes.
-        storage: Storage pool for rootfs.
+        storage: Storage pool for rootfs. Defaults to "local-lvm" (LVM thin
+            pool — block-backed, supports snapshots, thin-provisioned). Use
+            "local" for directory-backed storage if your Proxmox node has no
+            LVM thin pool. Run list_storage() to check what's available.
         bridge: Network bridge name.
         vlan_tag: Optional VLAN tag for the network interface.
         ip_config: IP configuration string (default: "ip=dhcp").
