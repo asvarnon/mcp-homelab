@@ -18,6 +18,7 @@ from mcp_homelab.setup.client_setup import (
     _load_json,
     _server_entry_stdio,
     _strip_jsonc_comments,
+    _windows_claude_config_path,
     _write_json,
     upsert_claude_desktop,
     upsert_vscode,
@@ -32,6 +33,7 @@ from mcp_homelab.setup.client_setup import (
 class TestClaudeDesktopConfigPath:
     def test_returns_path_on_windows(self) -> None:
         with patch("mcp_homelab.setup.client_setup.platform.system", return_value="Windows"):
+            # Windows path now routes through Store-vs-traditional detection.
             result = _claude_desktop_config_path()
             assert result is not None
             assert result.name == "claude_desktop_config.json"
@@ -143,6 +145,53 @@ class TestLoadJson:
         result = _load_json(path)
         assert result["command"] == "C:\\Python310\\python.exe"
         assert result["args"] == ["//server/share/script.py"]
+
+
+class TestWindowsClaudeConfigPath:
+    def test_prefers_store_path_when_exists(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        store_path = (
+            tmp_path
+            / "AppData"
+            / "Local"
+            / "Packages"
+            / "Claude_pzs8sxrjxfjjc"
+            / "LocalCache"
+            / "Roaming"
+            / "Claude"
+        )
+        store_path.mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert _windows_claude_config_path() == store_path
+
+    def test_falls_back_to_traditional_when_no_store(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        traditional_path = tmp_path / "AppData" / "Roaming" / "Claude"
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert _windows_claude_config_path() == traditional_path
+
+    def test_full_path_includes_store_prefix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        store_path = (
+            tmp_path
+            / "AppData"
+            / "Local"
+            / "Packages"
+            / "Claude_pzs8sxrjxfjjc"
+            / "LocalCache"
+            / "Roaming"
+            / "Claude"
+        )
+        store_path.mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr("mcp_homelab.setup.client_setup.platform.system", lambda: "Windows")
+
+        result = _claude_desktop_config_path()
+        assert result is not None
+        assert "Packages" in str(result)
+        assert "Claude_pzs8sxrjxfjjc" in str(result)
 
 
 class TestStripJsoncComments:

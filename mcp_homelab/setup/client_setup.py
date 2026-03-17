@@ -20,11 +20,30 @@ from core.config import get_config_dir
 # Client config locations
 # ---------------------------------------------------------------------------
 
+_WINDOWS_STORE_PACKAGE = "Claude_pzs8sxrjxfjjc"
+
+
+def _windows_claude_config_path() -> Path:
+    store_path = (
+        Path.home()
+        / "AppData"
+        / "Local"
+        / "Packages"
+        / _WINDOWS_STORE_PACKAGE
+        / "LocalCache"
+        / "Roaming"
+        / "Claude"
+    )
+    traditional_path = Path.home() / "AppData" / "Roaming" / "Claude"
+    if store_path.is_dir():
+        return store_path
+    return traditional_path
+
 def _claude_desktop_config_path() -> Path | None:
     """Return the Claude Desktop config path for the current OS, or None."""
     system = platform.system()
     if system == "Windows":
-        appdata = Path.home() / "AppData" / "Roaming" / "Claude"
+        appdata = _windows_claude_config_path()
     elif system == "Darwin":
         appdata = Path.home() / "Library" / "Application Support" / "Claude"
     else:
