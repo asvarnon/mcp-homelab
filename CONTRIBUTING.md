@@ -164,9 +164,9 @@ Because integration tests contain environment-specific details (node names, stor
 ### Running integration tests
 
 ```bash
-# Integration tests are NOT picked up by pytest (gitignored + excluded)
-# Run them explicitly as a module:
-python -m tests.integration.test_lxc_integration
+# Integration tests are gitignored — they won't exist in CI or cloned repos
+# Run them explicitly:
+python tests/integration/test_lxc_integration.py
 ```
 
 ### What you need

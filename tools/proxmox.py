@@ -6,10 +6,10 @@ All functions use ProxmoxClient for transport — no direct httpx usage here.
 
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Literal, TypedDict
 
 from core.config import proxmox_configured
-from core.proxmox_api import ProxmoxClient, ProxmoxAPIError
+from core.proxmox_api import ProxmoxClient
 
 
 # ---------------------------------------------------------------------------
@@ -81,6 +81,10 @@ class TemplateInfo(TypedDict):
     size_mb: float
 
 
+class ProxmoxError(TypedDict):
+    error: str
+
+
 # ---------------------------------------------------------------------------
 # Module-level constants
 # ---------------------------------------------------------------------------
@@ -90,16 +94,16 @@ _BYTES_PER_GB = 1024 ** 3   # 1_073_741_824
 
 _client = ProxmoxClient()
 
-_NOT_CONFIGURED: dict[str, str] = {
-    "error": "Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env."
-}
+_NOT_CONFIGURED = ProxmoxError(
+    error="Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env."
+)
 
 
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
 
-async def _find_resource_node(vmid: int, resource_type: str) -> str:
+async def _find_resource_node(vmid: int, resource_type: Literal["qemu", "lxc"]) -> str:
     """Locate which PVE node a VM or LXC container lives on.
 
     Uses the cluster resources endpoint to find the resource without
@@ -137,7 +141,7 @@ async def _find_ct_node(vmid: int) -> str:
 # Public tool functions
 # ---------------------------------------------------------------------------
 
-async def list_vms() -> list[VmSummary] | list[dict]:
+async def list_vms() -> list[VmSummary] | list[ProxmoxError]:
     """Return all VMs with ID, name, status, and resource allocation.
 
     Queries every PVE node and aggregates the results.
@@ -165,7 +169,7 @@ async def list_vms() -> list[VmSummary] | list[dict]:
     return vms
 
 
-async def get_vm_status(vmid: int) -> VmStatus | dict:
+async def get_vm_status(vmid: int) -> VmStatus | ProxmoxError:
     """Return detailed status for a specific VM.
 
     Args:
@@ -230,7 +234,7 @@ async def stop_vm(vmid: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def list_lxc() -> list[LxcSummary] | list[dict]:
+async def list_lxc() -> list[LxcSummary] | list[ProxmoxError]:
     """Return all LXC containers with ID, name, status, and resource allocation.
 
     Queries every PVE node and aggregates the results.
@@ -259,7 +263,7 @@ async def list_lxc() -> list[LxcSummary] | list[dict]:
     return containers
 
 
-async def get_lxc_status(vmid: int) -> LxcStatus | dict:
+async def get_lxc_status(vmid: int) -> LxcStatus | ProxmoxError:
     """Return detailed status for a specific LXC container.
 
     Args:
@@ -341,7 +345,7 @@ async def create_lxc(
     unprivileged: bool = True,
     start_after_create: bool = False,
     password: str | None = None,
-) -> LxcCreateResult | dict:
+) -> LxcCreateResult | ProxmoxError:
     """Create a new LXC container on a Proxmox node.
 
     Args:
@@ -406,7 +410,7 @@ async def create_lxc(
     return LxcCreateResult(vmid=vmid, node=node, task_id=task_id)
 
 
-async def get_next_vmid() -> int | dict:
+async def get_next_vmid() -> int | ProxmoxError:
     """Get the next available VM/CT ID from the Proxmox cluster.
 
     Returns:
@@ -419,7 +423,7 @@ async def get_next_vmid() -> int | dict:
     return int(result)
 
 
-async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict]:
+async def list_storage(node: str | None = None) -> list[StorageInfo] | list[ProxmoxError]:
     """List available storage on a Proxmox node with capacity info.
 
     Args:
@@ -433,6 +437,8 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict
 
     if node is None:
         nodes = await _client.get_nodes()
+        if not nodes:
+            raise ValueError("No Proxmox nodes found in cluster")
         node = nodes[0]
 
     data = await _client.get(f"/nodes/{node}/storage")
@@ -455,7 +461,7 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict
 async def list_templates(
     node: str | None = None,
     storage: str | None = None,
-) -> list[TemplateInfo] | list[dict]:
+) -> list[TemplateInfo] | list[ProxmoxError]:
     """List available OS templates for LXC container creation.
 
     Args:
@@ -471,6 +477,8 @@ async def list_templates(
 
     if node is None:
         nodes = await _client.get_nodes()
+        if not nodes:
+            raise ValueError("No Proxmox nodes found in cluster")
         node = nodes[0]
 
     if storage is None:

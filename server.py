@@ -22,7 +22,7 @@ from mcp.server.fastmcp import FastMCP
 
 from tools import nodes, proxmox, opnsense, discovery, context_gen
 from tools.nodes import NodeSummary, NodeStatus, ContainerInfo
-from tools.proxmox import VmSummary, VmStatus
+from tools.proxmox import VmSummary, VmStatus, ProxmoxError
 
 mcp = FastMCP("homelab")
 
@@ -65,13 +65,13 @@ async def restart_container(hostname: str, container: str) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def list_vms() -> list[VmSummary] | list[dict]:
+async def list_vms() -> list[VmSummary] | list[ProxmoxError]:
     """List all VMs on the Proxmox hypervisor with status and resource info."""
     return await proxmox.list_vms()
 
 
 @mcp.tool()
-async def get_vm_status(vmid: int) -> VmStatus | dict:
+async def get_vm_status(vmid: int) -> VmStatus | ProxmoxError:
     """Get detailed status for a specific Proxmox VM."""
     return await proxmox.get_vm_status(vmid)
 
@@ -93,13 +93,13 @@ async def stop_vm(vmid: int) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def list_lxc() -> list[proxmox.LxcSummary] | list[dict]:
+async def list_lxc() -> list[proxmox.LxcSummary] | list[ProxmoxError]:
     """List all LXC containers on the Proxmox hypervisor with status and resource info."""
     return await proxmox.list_lxc()
 
 
 @mcp.tool()
-async def get_lxc_status(vmid: int) -> proxmox.LxcStatus | dict:
+async def get_lxc_status(vmid: int) -> proxmox.LxcStatus | ProxmoxError:
     """Get detailed status for a specific Proxmox LXC container."""
     return await proxmox.get_lxc_status(vmid)
 
@@ -135,7 +135,7 @@ async def create_lxc(
     unprivileged: bool = True,
     start_after_create: bool = False,
     password: str | None = None,
-) -> proxmox.LxcCreateResult | dict:
+) -> proxmox.LxcCreateResult | ProxmoxError:
     """Create a new LXC container on Proxmox. Use list_templates and list_storage to discover valid ostemplate and storage values first."""
     return await proxmox.create_lxc(
         node=node,
@@ -158,19 +158,19 @@ async def create_lxc(
 
 
 @mcp.tool()
-async def get_next_vmid() -> int | dict:
+async def get_next_vmid() -> int | ProxmoxError:
     """Get the next available VM/CT ID from the Proxmox cluster."""
     return await proxmox.get_next_vmid()
 
 
 @mcp.tool()
-async def list_storage(node: str | None = None) -> list[proxmox.StorageInfo] | list[dict]:
+async def list_storage(node: str | None = None) -> list[proxmox.StorageInfo] | list[ProxmoxError]:
     """List available storage on a Proxmox node with capacity info."""
     return await proxmox.list_storage(node)
 
 
 @mcp.tool()
-async def list_templates(node: str | None = None, storage: str | None = None) -> list[proxmox.TemplateInfo] | list[dict]:
+async def list_templates(node: str | None = None, storage: str | None = None) -> list[proxmox.TemplateInfo] | list[ProxmoxError]:
     """List available OS templates for LXC container creation on a Proxmox node."""
     return await proxmox.list_templates(node, storage)
 
