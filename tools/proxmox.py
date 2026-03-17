@@ -6,7 +6,8 @@ All functions use ProxmoxClient for transport — no direct httpx usage here.
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal
+from typing_extensions import TypedDict
 
 from core.config import get_proxmox_config, proxmox_configured
 from core.proxmox_api import ProxmoxClient
