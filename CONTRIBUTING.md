@@ -63,6 +63,29 @@ All tests should pass before submitting a PR. If something's failing on `master`
 
 ---
 
+## Versioning Policy
+
+This project uses [Semantic Versioning](https://semver.org/). The version in `pyproject.toml` represents what gets **published to PyPI** — what users install with `pip install mcp-homelab`.
+
+**Only bump the version when shipped code changes:**
+
+| Change type                              | Bump version? | Why                                    |
+| ---------------------------------------- | ------------- | -------------------------------------- |
+| Python code (tools, core, setup)         | **Yes**       | Changes runtime behavior               |
+| `pyproject.toml` dependency changes      | **Yes**       | Changes installed dependencies         |
+| `config.yaml` schema changes             | **Yes**       | Changes runtime behavior               |
+| Tests                                    | No            | No effect on installed runtime         |
+| Agent/instruction files (`.github/`)     | No            | Repo tooling, no runtime effect        |
+| Docs (README, design docs, CONTRIBUTING) | No            | No effect on installed runtime         |
+| CI/CD workflows                          | No            | No effect on installed runtime         |
+
+**Bump levels:**
+- **Patch** (1.3.1 → 1.3.2): Bug fixes, non-breaking improvements
+- **Minor** (1.3.x → 1.4.0): New tools, new features, backwards-compatible additions
+- **Major** (1.x → 2.0.0): Breaking changes to config schema, tool signatures, or API
+
+---
+
 ## AI-Assisted Contributions
 
 This project actively uses AI tools to increase development productivity. If your PR involved AI assistance (Copilot, Claude, ChatGPT, Cursor, etc.), please mention it in the PR description. This isn't about gatekeeping — it helps reviewers focus their attention in the right places.

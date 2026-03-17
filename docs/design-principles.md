@@ -76,3 +76,18 @@ Each layer has one job. Tools call core. Core calls config. Config calls env.
 The config is the only place that knows about specific infrastructure.
 A different user swaps `config.yaml` and their `.env` — the tools require zero changes.
 This is the design target for every tool written in this project.
+
+---
+
+## Versioning Policy
+
+The version in `pyproject.toml` tracks **shipped code only** — what users install via `pip install mcp-homelab`.
+
+| Bump? | Change type |
+|---|---|
+| **Yes** | Python code (tools, core, setup), dependency changes, config schema changes |
+| **No** | Tests, agent files (`.github/`), docs, CI/CD workflows |
+
+- **Patch**: Bug fixes, non-breaking improvements
+- **Minor**: New tools, new features, backwards-compatible additions
+- **Major**: Breaking changes to config schema, tool signatures, or API
