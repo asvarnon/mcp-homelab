@@ -148,50 +148,59 @@ class TestLoadJson:
 
 
 class TestWindowsClaudeConfigPath:
-    def test_prefers_store_path_when_exists(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        store_path = (
-            tmp_path
-            / "AppData"
-            / "Local"
-            / "Packages"
-            / "Claude_pzs8sxrjxfjjc"
-            / "LocalCache"
-            / "Roaming"
-            / "Claude"
-        )
-        store_path.mkdir(parents=True)
+    def test_prefers_store_path_when_package_exists(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Store package dir exists -> return Store config path."""
+        package_dir = tmp_path / "AppData" / "Local" / "Packages" / "Claude_abc123"
+        package_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-        assert _windows_claude_config_path() == store_path
+        result = _windows_claude_config_path()
+        expected = package_dir / "LocalCache" / "Roaming" / "Claude"
+        assert result == expected
 
     def test_falls_back_to_traditional_when_no_store(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        traditional_path = tmp_path / "AppData" / "Roaming" / "Claude"
+        """No Store package -> return traditional AppData/Roaming/Claude."""
+        packages_dir = tmp_path / "AppData" / "Local" / "Packages"
+        packages_dir.mkdir(parents=True)
 
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-        assert _windows_claude_config_path() == traditional_path
+        result = _windows_claude_config_path()
+        expected = tmp_path / "AppData" / "Roaming" / "Claude"
+        assert result == expected
 
-    def test_full_path_includes_store_prefix(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        store_path = (
-            tmp_path
-            / "AppData"
-            / "Local"
-            / "Packages"
-            / "Claude_pzs8sxrjxfjjc"
-            / "LocalCache"
-            / "Roaming"
-            / "Claude"
-        )
-        store_path.mkdir(parents=True)
+    def test_falls_back_when_packages_dir_missing(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """No Packages directory at all -> return traditional path."""
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
 
-        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        result = _windows_claude_config_path()
+        expected = tmp_path / "AppData" / "Roaming" / "Claude"
+        assert result == expected
+
+    def test_picks_first_match_sorted(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Multiple Claude_* dirs -> picks first alphabetically."""
+        packages_dir = tmp_path / "AppData" / "Local" / "Packages"
+        (packages_dir / "Claude_zzz999").mkdir(parents=True)
+        (packages_dir / "Claude_aaa111").mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+
+        result = _windows_claude_config_path()
+        assert "Claude_aaa111" in str(result)
+
+    def test_full_path_uses_store_when_detected(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Integration: _claude_desktop_config_path() returns Store path."""
+        package_dir = tmp_path / "AppData" / "Local" / "Packages" / "Claude_testpkg"
+        package_dir.mkdir(parents=True)
+
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
         monkeypatch.setattr("mcp_homelab.setup.client_setup.platform.system", lambda: "Windows")
 
         result = _claude_desktop_config_path()
         assert result is not None
         assert "Packages" in str(result)
-        assert "Claude_pzs8sxrjxfjjc" in str(result)
+        assert result.name == "claude_desktop_config.json"
 
 
 class TestStripJsoncComments:
