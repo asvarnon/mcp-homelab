@@ -47,6 +47,27 @@ def parse_args() -> argparse.Namespace:
         default="https://github.com/AustinMRobinson/mcp-homelab.git",
         help="Git repository URL",
     )
+    parser.add_argument(
+        "--pve-host",
+        default=None,
+        help="Proxmox VE host IP/hostname for LXC SSH bootstrap",
+    )
+    parser.add_argument(
+        "--pve-user",
+        default=None,
+        help="SSH user on Proxmox VE host (required when --pve-host is set)",
+    )
+    parser.add_argument(
+        "--pve-key",
+        default=None,
+        help="Path to SSH private key for Proxmox VE host (required when --pve-host is set)",
+    )
+    parser.add_argument(
+        "--vmid",
+        type=int,
+        default=100,
+        help="LXC container VMID on Proxmox VE",
+    )
     return parser.parse_args()
 
 
@@ -75,6 +96,7 @@ def _build_ssh_command(
 ) -> list[str]:
     return [
         "ssh",
+        "-T",
         "-i",
         str(ssh_key),
         "-o",
@@ -151,15 +173,54 @@ def main() -> int:
     ssh_user: str = args.ssh_user
     port: int = args.port
     repo_url: str = args.repo_url
+    pve_host: str | None = args.pve_host
+    pve_user: str | None = args.pve_user
+    pve_key_str: str | None = args.pve_key
+    vmid: int = args.vmid
+    bootstrap_enabled: bool = pve_host is not None
+
+    if bootstrap_enabled:
+        missing_pve: list[str] = []
+        if not pve_user:
+            missing_pve.append("--pve-user")
+        if not pve_key_str:
+            missing_pve.append("--pve-key")
+        if missing_pve:
+            print(f"ERROR: {', '.join(missing_pve)} required when --pve-host is set", file=sys.stderr)
+            return 2
+
+    pve_key: Path = Path(pve_key_str).expanduser() if pve_key_str else Path()
+    # Narrow types after validation — guaranteed non-None when bootstrap_enabled
+    pve_user_resolved: str = pve_user or ""
+    total_steps: int = 12 if bootstrap_enabled else 11
 
     if "\n" in token or "\r" in token:
         print("ERROR: --token must not contain newline characters", file=sys.stderr)
         return 2
 
-    print("Step 1/11: Checking SSH key")
+    if bootstrap_enabled:
+        print(f"Step 0/{total_steps}: Bootstrapping SSH in LXC via Proxmox")
+        bootstrap_inner_command: str = (
+            "apt-get update && apt-get install -y openssh-server && "
+            "systemctl enable --now ssh"
+        )
+        vmid_quoted: str = shlex.quote(str(vmid))
+        bootstrap_command: str = (
+            f"sudo pct exec {vmid_quoted} -- bash -c {shlex.quote(bootstrap_inner_command)}"
+        )
+        _run_ssh_command(
+            pve_host,
+            pve_key,
+            pve_user_resolved,
+            bootstrap_command,
+            f"bootstrap openssh-server in LXC VMID {vmid}",
+        )
+        print(f"Bootstrap complete for VMID {vmid} via PVE host {pve_host}.")
+
+    print(f"Step 1/{total_steps}: Checking SSH key")
     _ensure_ssh_key(ssh_key)
 
-    print("Step 2/11: Verifying SSH connectivity")
+    print(f"Step 2/{total_steps}: Verifying SSH connectivity")
     hostname_output: str = _run_ssh_command(
         host,
         ssh_key,
@@ -169,7 +230,7 @@ def main() -> int:
     )
     print(f"SSH connectivity OK. Remote hostname: {hostname_output}")
 
-    print("Step 3/11: Installing system packages")
+    print(f"Step 3/{total_steps}: Installing system packages")
     _run_ssh_command(
         host,
         ssh_key,
@@ -178,7 +239,7 @@ def main() -> int:
         "install system packages",
     )
 
-    print("Step 4/11: Creating service user")
+    print(f"Step 4/{total_steps}: Creating service user")
     _run_ssh_command(
         host,
         ssh_key,
@@ -187,7 +248,7 @@ def main() -> int:
         "create mcp service user",
     )
 
-    print("Step 5/11: Cloning or updating repository")
+    print(f"Step 5/{total_steps}: Cloning or updating repository")
     branch_quoted: str = shlex.quote(branch)
     repo_url_quoted: str = shlex.quote(repo_url)
     repo_command: str = (
@@ -200,7 +261,7 @@ def main() -> int:
     )
     _run_ssh_command(host, ssh_key, ssh_user, repo_command, "clone or update repository")
 
-    print("Step 6/11: Creating virtual environment and installing dependencies")
+    print(f"Step 6/{total_steps}: Creating virtual environment and installing dependencies")
     _run_ssh_command(
         host,
         ssh_key,
@@ -216,7 +277,7 @@ def main() -> int:
         "install Python dependencies",
     )
 
-    print("Step 7/11: Writing config.yaml")
+    print(f"Step 7/{total_steps}: Writing config.yaml")
     config_content: str = (
         "server:\n"
         "  transport: http\n"
@@ -233,7 +294,7 @@ def main() -> int:
         "/opt/mcp-homelab/config.yaml",
     )
 
-    print("Step 8/11: Writing .env")
+    print(f"Step 8/{total_steps}: Writing .env")
     env_content: str = f"MCP_BEARER_TOKEN={token}\n"
     _transfer_file(
         host,
@@ -250,7 +311,7 @@ def main() -> int:
         "set ownership and permissions",
     )
 
-    print("Step 9/11: Installing systemd unit")
+    print(f"Step 9/{total_steps}: Installing systemd unit")
     service_path: Path = Path(__file__).resolve().parent / "mcp-homelab.service"
     service_content: str = service_path.read_text(encoding="utf-8")
     _transfer_file(
@@ -275,7 +336,7 @@ def main() -> int:
         "enable mcp-homelab service",
     )
 
-    print("Step 10/11: Starting service")
+    print(f"Step 10/{total_steps}: Starting service")
     _run_ssh_command(
         host,
         ssh_key,
@@ -302,7 +363,7 @@ def main() -> int:
     print("Recent logs:")
     print(logs_output)
 
-    print("Step 11/11: Deployment summary")
+    print(f"Step 11/{total_steps}: Deployment summary")
     print(f"Server running at http://{host}:{port}/mcp")
     print(f"Bearer token: {_mask_token(token)}")
     print(f"Logs: ssh root@{host} journalctl -u mcp-homelab -f")
