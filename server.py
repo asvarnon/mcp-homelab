@@ -134,7 +134,6 @@ async def create_lxc(
     ssh_public_key: str | None = None,
     unprivileged: bool = True,
     start_after_create: bool = False,
-    password: str | None = None,
 ) -> proxmox.LxcCreateResult | dict:
     """Create a new LXC container on Proxmox. Use list_templates and list_storage to discover valid ostemplate and storage values first."""
     return await proxmox.create_lxc(
@@ -153,7 +152,6 @@ async def create_lxc(
         ssh_public_key=ssh_public_key,
         unprivileged=unprivileged,
         start_after_create=start_after_create,
-        password=password,
     )
 
 

@@ -373,13 +373,25 @@ async def create_lxc(
         ssh_public_key: Optional SSH public key to inject.
         unprivileged: Whether to create an unprivileged container.
         start_after_create: Whether to start the container after creation.
-        password: Optional root password.
+        password: Optional root password. Not exposed via MCP to avoid leaking secrets into LLM transcripts. Use ssh_public_key for key-based auth instead.
 
     Returns:
         LxcCreateResult dict with vmid, node, and task_id.
     """
     if not proxmox_configured():
         return _NOT_CONFIGURED
+
+    # Input validation
+    if cores < 1:
+        raise ValueError(f"cores must be >= 1, got {cores}")
+    if memory_mb < 16:
+        raise ValueError(f"memory_mb must be >= 16, got {memory_mb}")
+    if swap_mb < 0:
+        raise ValueError(f"swap_mb must be >= 0, got {swap_mb}")
+    if disk_gb < 1:
+        raise ValueError(f"disk_gb must be >= 1, got {disk_gb}")
+    if vlan_tag is not None and not (1 <= vlan_tag <= 4094):
+        raise ValueError(f"vlan_tag must be in range 1-4094 when set, got {vlan_tag}")
 
     if storage is None:
         cfg = get_proxmox_config()

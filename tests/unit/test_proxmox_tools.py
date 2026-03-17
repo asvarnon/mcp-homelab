@@ -541,6 +541,83 @@ class TestCreateLxc:
         assert posted_data["net0"] == "name=eth0,bridge=vmbr1,ip=dhcp"
 
 
+class TestCreateLxcValidation:
+    @pytest.mark.asyncio
+    async def test_rejects_zero_cores(self) -> None:
+        with pytest.raises(ValueError, match=r"cores must be >= 1, got 0"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                cores=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_negative_memory(self) -> None:
+        with pytest.raises(ValueError, match=r"memory_mb must be >= 16, got -1"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                memory_mb=-1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_negative_swap(self) -> None:
+        with pytest.raises(ValueError, match=r"swap_mb must be >= 0, got -1"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                swap_mb=-1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_zero_disk(self) -> None:
+        with pytest.raises(ValueError, match=r"disk_gb must be >= 1, got 0"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                disk_gb=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_vlan_below_range(self) -> None:
+        with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 0"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                vlan_tag=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_vlan_above_range(self) -> None:
+        with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 4095"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=300,
+                vlan_tag=4095,
+            )
+
+    @pytest.mark.asyncio
+    async def test_accepts_valid_vlan(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+
+        result = await create_lxc(
+            node="pve",
+            ostemplate="local:vztmpl/debian-12.tar.zst",
+            vmid=300,
+            vlan_tag=50,
+        )
+
+        assert result["vmid"] == 300
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert "tag=50" in posted_data["net0"]
+
+
 # ===========================================================================
 # get_next_vmid
 # ===========================================================================
