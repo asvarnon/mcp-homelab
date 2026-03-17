@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
-from core.config import proxmox_configured
+from core.config import get_proxmox_config, proxmox_configured
 from core.proxmox_api import ProxmoxClient
 
 
@@ -131,6 +131,17 @@ async def _find_vm_node(vmid: int) -> str:
 async def _find_ct_node(vmid: int) -> str:
     """Locate which PVE node an LXC container lives on."""
     return await _find_resource_node(vmid, "lxc")
+
+
+async def _resolve_default_node() -> str:
+    """Resolve the default PVE node: prefer config, fall back to first discovered."""
+    cfg = get_proxmox_config()
+    nodes = await _client.get_nodes()
+    if not nodes:
+        raise ValueError("No Proxmox nodes found in cluster")
+    if cfg and cfg.default_node and cfg.default_node in nodes:
+        return cfg.default_node
+    return nodes[0]
 
 
 # ---------------------------------------------------------------------------
@@ -333,8 +344,8 @@ async def create_lxc(
     memory_mb: int = 512,
     swap_mb: int = 512,
     disk_gb: int = 4,
-    storage: str = "local-lvm",
-    bridge: str = "vmbr0",
+    storage: str | None = None,
+    bridge: str | None = None,
     vlan_tag: int | None = None,
     ip_config: str = "ip=dhcp",
     ssh_public_key: str | None = None,
@@ -353,11 +364,10 @@ async def create_lxc(
         memory_mb: RAM in megabytes.
         swap_mb: Swap in megabytes.
         disk_gb: Root disk size in gigabytes.
-        storage: Storage pool for rootfs. Defaults to "local-lvm" (LVM thin
-            pool — block-backed, supports snapshots, thin-provisioned). Use
-            "local" for directory-backed storage if your Proxmox node has no
-            LVM thin pool. Run list_storage() to check what's available.
-        bridge: Network bridge name.
+        storage: Storage pool for rootfs. Defaults to proxmox.default_storage
+            from config.yaml, or "local-lvm" if no config value is available.
+        bridge: Network bridge name. Defaults to proxmox.default_bridge from
+            config.yaml, or "vmbr0" if no config value is available.
         vlan_tag: Optional VLAN tag for the network interface.
         ip_config: IP configuration string (default: "ip=dhcp").
         ssh_public_key: Optional SSH public key to inject.
@@ -370,6 +380,13 @@ async def create_lxc(
     """
     if not proxmox_configured():
         return _NOT_CONFIGURED
+
+    if storage is None:
+        cfg = get_proxmox_config()
+        storage = cfg.default_storage if cfg else "local-lvm"
+    if bridge is None:
+        cfg = get_proxmox_config()
+        bridge = cfg.default_bridge if cfg else "vmbr0"
 
     if vmid is None:
         next_id = await get_next_vmid()
@@ -423,7 +440,8 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict
     """List available storage on a Proxmox node with capacity info.
 
     Args:
-        node: PVE node name. Defaults to the first discovered node.
+        node: PVE node name. Defaults to configured proxmox.default_node
+            when available, otherwise first discovered node.
 
     Returns:
         List of StorageInfo dicts.
@@ -432,10 +450,7 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict
         return [_NOT_CONFIGURED]
 
     if node is None:
-        nodes = await _client.get_nodes()
-        if not nodes:
-            raise ValueError("No Proxmox nodes found in cluster")
-        node = nodes[0]
+        node = await _resolve_default_node()
 
     data = await _client.get(f"/nodes/{node}/storage")
     storages: list[StorageInfo] = []
@@ -461,7 +476,8 @@ async def list_templates(
     """List available OS templates for LXC container creation.
 
     Args:
-        node: PVE node name. Defaults to the first discovered node.
+        node: PVE node name. Defaults to configured proxmox.default_node
+            when available, otherwise first discovered node.
         storage: Storage pool to query. Defaults to the first storage
             whose content field includes "vztmpl".
 
@@ -472,10 +488,7 @@ async def list_templates(
         return [_NOT_CONFIGURED]
 
     if node is None:
-        nodes = await _client.get_nodes()
-        if not nodes:
-            raise ValueError("No Proxmox nodes found in cluster")
-        node = nodes[0]
+        node = await _resolve_default_node()
 
     if storage is None:
         all_storage = await list_storage(node)

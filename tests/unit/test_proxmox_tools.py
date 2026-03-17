@@ -9,9 +9,11 @@ Java comparison: Testing a Spring Service layer with a mocked repository.
 from __future__ import annotations
 
 import pytest
+from core.config import ProxmoxConfig
 
 from tools.proxmox import (
     _find_ct_node,
+    _resolve_default_node,
     _find_resource_node,
     _find_vm_node,
     create_lxc,
@@ -253,6 +255,53 @@ class TestFindResourceNode:
 
 
 # ===========================================================================
+# _resolve_default_node
+# ===========================================================================
+
+
+class TestResolveDefaultNode:
+    @pytest.mark.asyncio
+    async def test_uses_configured_default_when_present(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
+        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        monkeypatch.setattr(
+            "tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve2"),
+        )
+        result = await _resolve_default_node()
+        assert result == "pve2"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_configured_default_missing(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
+        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        monkeypatch.setattr(
+            "tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve3"),
+        )
+        result = await _resolve_default_node()
+        assert result == "pve"
+
+    @pytest.mark.asyncio
+    async def test_falls_back_when_default_node_not_set(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
+        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        monkeypatch.setattr(
+            "tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(host="10.10.10.50", default_node=None),
+        )
+        result = await _resolve_default_node()
+        assert result == "pve"
+
+    @pytest.mark.asyncio
+    async def test_raises_when_cluster_has_no_nodes(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
+        mock_proxmox_client.get_nodes.return_value = []
+        monkeypatch.setattr(
+            "tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve"),
+        )
+        with pytest.raises(ValueError, match="No Proxmox nodes found in cluster"):
+            await _resolve_default_node()
+
+
+# ===========================================================================
 # list_lxc
 # ===========================================================================
 
@@ -462,6 +511,34 @@ class TestCreateLxc:
         )
         posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
         assert posted_data["password"] == "s3cret"
+
+    @pytest.mark.asyncio
+    async def test_uses_config_defaults_when_storage_and_bridge_are_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_proxmox_client,
+    ) -> None:
+        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        monkeypatch.setattr(
+            "tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(
+                host="10.10.10.50",
+                default_storage="local",
+                default_bridge="vmbr1",
+            ),
+        )
+
+        await create_lxc(
+            node="pve",
+            ostemplate="local:vztmpl/debian-12.tar.zst",
+            vmid=300,
+            storage=None,
+            bridge=None,
+        )
+
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data["rootfs"] == "local:4"
+        assert posted_data["net0"] == "name=eth0,bridge=vmbr1,ip=dhcp"
 
 
 # ===========================================================================

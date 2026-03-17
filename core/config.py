@@ -39,6 +39,9 @@ class ProxmoxConfig(BaseModel):
     host: str
     port: int = 8006
     verify_ssl: bool = False
+    default_node: str | None = None
+    default_storage: str = "local-lvm"
+    default_bridge: str = "vmbr0"
 
 
 class OPNsenseConfig(BaseModel):
@@ -63,6 +66,9 @@ class AppConfig(BaseModel):
             )
             data["hosts"] = data.pop("nodes")
         return data
+
+
+_config: AppConfig | None = None
 
 
 # --- .env loading and startup validation ---
@@ -156,7 +162,9 @@ def load_config(config_path: Path | None = None) -> AppConfig:
     with open(config_path, "r") as f:
         raw: dict[str, Any] = _yaml.load(f)
 
-    return AppConfig(**raw)
+    global _config
+    _config = AppConfig(**raw)
+    return _config
 
 
 # --- Environment variable accessors ---
@@ -197,6 +205,11 @@ def get_proxmox_token_id() -> str:
 
 def get_proxmox_token_secret() -> str:
     return os.environ["PROXMOX_TOKEN_SECRET"]
+
+
+def get_proxmox_config() -> ProxmoxConfig | None:
+    """Return the ProxmoxConfig from the loaded AppConfig, or None."""
+    return _config.proxmox if _config else None
 
 
 class OPNsenseCredentials(NamedTuple):
