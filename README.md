@@ -9,7 +9,7 @@ AI assistants are useful for infrastructure work, but they can't see your enviro
 **What it supports:**
 - **Any Linux host** accessible via SSH (bare-metal, VMs, LXC containers)
 - **Docker** container listing, logs, and restart
-- **Proxmox VE** VM management (optional)
+- **Proxmox VE** VM and LXC container management (optional)
 - **OPNsense** firewall inspection (optional)
 
 Proxmox and OPNsense are optional — the server works with just SSH-accessible hosts.
@@ -53,6 +53,14 @@ That's it. Your MCP client will now spawn the server automatically when it needs
 | Proxmox   | `get_vm_status`        | Detailed status for one VM                                      |
 | Proxmox   | `start_vm`             | Start a stopped VM                                              |
 | Proxmox   | `stop_vm`              | Gracefully stop a VM                                            |
+| Proxmox   | `list_lxc`             | All LXC containers with status and resources                    |
+| Proxmox   | `get_lxc_status`       | Detailed status for one LXC container                           |
+| Proxmox   | `start_lxc`            | Start a stopped LXC container                                   |
+| Proxmox   | `stop_lxc`             | Gracefully stop an LXC container                                |
+| Proxmox   | `create_lxc`           | Create a new LXC container from a template                      |
+| Proxmox   | `get_next_vmid`        | Next available VM/CT ID from the cluster                        |
+| Proxmox   | `list_storage`         | Storage pools with capacity info                                |
+| Proxmox   | `list_templates`       | Available OS templates for LXC creation                         |
 | OPNsense  | `get_dhcp_leases`      | Active DHCP leases                                              |
 | OPNsense  | `get_interface_status` | Interface state                                                 |
 | OPNsense  | `get_firewall_aliases` | Alias definitions                                               |
@@ -85,7 +93,17 @@ PROXMOX_TOKEN_ID=admin@pam!mcp-homelab
 PROXMOX_TOKEN_SECRET=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 ```
 
-The Proxmox host/port/SSL settings are in `config.yaml` under the `proxmox:` section.
+The Proxmox host/port/SSL settings are in `config.yaml` under the `proxmox:` section. You can also configure LXC creation defaults:
+
+```yaml
+proxmox:
+  host: "10.10.10.50"
+  port: 8006
+  verify_ssl: false
+  default_node: pve           # preferred node for storage/template queries
+  default_storage: local      # rootfs storage for create_lxc ("local" = dir, "local-lvm" = LVM thin)
+  default_bridge: vmbr0       # network bridge for create_lxc
+```
 
 ### Node access
 
@@ -226,7 +244,7 @@ tests/
     ├── test_ssh.py              # Connection caching, stale eviction, credential resolution
     ├── test_node_parsers.py     # All SSH output parsers (uptime, CPU, memory, disk, Docker,
     │                            #   lscpu, meminfo, lsblk, dmidecode, labels, rounding)
-    ├── test_proxmox_tools.py    # VM listing, status conversion, node discovery
+    ├── test_proxmox_tools.py    # VM/LXC tools, storage, templates, node discovery, input validation
     ├── test_opnsense_tools.py   # DHCP leases, interfaces, firewall aliases
     ├── test_prompts.py          # Input validation (IP, int, path, yes/no, node names)
     ├── test_config_writer.py    # YAML round-trip, .env upserts, section preservation
