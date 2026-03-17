@@ -69,15 +69,15 @@ This project uses [Semantic Versioning](https://semver.org/). The version in `py
 
 **Only bump the version when shipped code changes:**
 
-| Change type                              | Bump version? | Why                            |
-| ---------------------------------------- | ------------- | ------------------------------ |
-| Python code (tools, core, setup)         | **Yes**       | Users get different behavior   |
-| `pyproject.toml` dependency changes      | **Yes**       | Affects install                |
-| `config.yaml` schema changes             | **Yes**       | Affects runtime behavior       |
-| Tests                                    | No            | Not in the distributed package |
-| Agent/instruction files (`.github/`)     | No            | Repo tooling, not shipped      |
-| Docs (README, design docs, CONTRIBUTING) | No            | Not in the package             |
-| CI/CD workflows                          | No            | Not in the package             |
+| Change type                              | Bump version? | Why                                    |
+| ---------------------------------------- | ------------- | -------------------------------------- |
+| Python code (tools, core, setup)         | **Yes**       | Changes runtime behavior               |
+| `pyproject.toml` dependency changes      | **Yes**       | Changes installed dependencies         |
+| `config.yaml` schema changes             | **Yes**       | Changes runtime behavior               |
+| Tests                                    | No            | No effect on installed runtime         |
+| Agent/instruction files (`.github/`)     | No            | Repo tooling, no runtime effect        |
+| Docs (README, design docs, CONTRIBUTING) | No            | No effect on installed runtime         |
+| CI/CD workflows                          | No            | No effect on installed runtime         |
 
 **Bump levels:**
 - **Patch** (1.3.1 → 1.3.2): Bug fixes, non-breaking improvements
