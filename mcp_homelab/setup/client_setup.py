@@ -19,12 +19,30 @@ from core.config import get_config_dir
 # ---------------------------------------------------------------------------
 # Client config locations
 # ---------------------------------------------------------------------------
+def _windows_claude_config_path() -> Path:
+    """Return the Claude Desktop config directory on Windows.
+
+    Checks for a Windows Store (MSIX) install first by scanning
+    ``AppData/Local/Packages/`` for a ``Claude_*`` directory. Falls
+    back to the traditional ``AppData/Roaming/Claude`` path.
+
+    The Store package directory (e.g. ``Claude_pzs8sxrjxfjjc``) uses a
+    hash suffix derived from the publisher's signing certificate. Scanning
+    with a glob avoids hardcoding a value that could change if Anthropic
+    rotates their certificate.
+    """
+    packages_dir = Path.home() / "AppData" / "Local" / "Packages"
+    matches = sorted(packages_dir.glob("Claude_*")) if packages_dir.is_dir() else []
+    if matches:
+        return matches[0] / "LocalCache" / "Roaming" / "Claude"
+    return Path.home() / "AppData" / "Roaming" / "Claude"
+
 
 def _claude_desktop_config_path() -> Path | None:
     """Return the Claude Desktop config path for the current OS, or None."""
     system = platform.system()
     if system == "Windows":
-        appdata = Path.home() / "AppData" / "Roaming" / "Claude"
+        appdata = _windows_claude_config_path()
     elif system == "Darwin":
         appdata = Path.home() / "Library" / "Application Support" / "Claude"
     else:
