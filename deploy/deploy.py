@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--repo-url",
-        default="https://github.com/AustinMRobinson/mcp-homelab.git",
+        default="https://github.com/asvarnon/mcp-homelab.git",
         help="Git repository URL",
     )
     parser.add_argument(
@@ -77,6 +77,8 @@ def _run_command(command: list[str], description: str) -> subprocess.CompletedPr
         capture_output=True,
         text=True,
         check=False,
+        encoding="utf-8",
+        errors="replace",
     )
     if result.returncode != 0:
         print(f"ERROR: {description}", file=sys.stderr)

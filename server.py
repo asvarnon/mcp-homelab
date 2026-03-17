@@ -232,6 +232,8 @@ if __name__ == "__main__":
 
         from core.auth import StaticBearerVerifier
 
+        from mcp.server.transport_security import TransportSecuritySettings
+
         token = os.environ["MCP_BEARER_TOKEN"]
         mcp.settings.host = config.server.host
         mcp.settings.port = config.server.port
@@ -239,6 +241,15 @@ if __name__ == "__main__":
         public_url = (
             str(config.server.public_url) if config.server.public_url
             else f"http://{config.server.host}:{config.server.port}"
+        )
+        # Override DNS rebinding protection to allow the configured host.
+        # FastMCP's constructor auto-enables it for localhost only, but we
+        # re-bind to a non-localhost address so we must update allowed_hosts.
+        host_with_port = f"{config.server.host}:{config.server.port}"
+        mcp.settings.transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[host_with_port],
+            allowed_origins=[f"http://{host_with_port}"],
         )
         mcp.settings.auth = AuthSettings(
             issuer_url=AnyHttpUrl(public_url),
