@@ -17,6 +17,24 @@ from core.proxmox_api import ProxmoxClient, ProxmoxAPIError
 # ---------------------------------------------------------------------------
 
 
+class VmSummary(TypedDict):
+    vmid: int
+    name: str
+    status: str
+    cpus: int
+    memory_mb: int
+
+
+class VmStatus(TypedDict):
+    vmid: int
+    name: str
+    status: str
+    uptime_seconds: int
+    cpu_usage_percent: float
+    memory_used_mb: int
+    memory_total_mb: int
+
+
 class LxcSummary(TypedDict):
     vmid: int
     name: str
@@ -62,6 +80,14 @@ class TemplateInfo(TypedDict):
     format: str
     size_mb: float
 
+
+# ---------------------------------------------------------------------------
+# Module-level constants
+# ---------------------------------------------------------------------------
+
+_BYTES_PER_MB = 1024 ** 2   # 1_048_576
+_BYTES_PER_GB = 1024 ** 3   # 1_073_741_824
+
 _client = ProxmoxClient()
 
 _NOT_CONFIGURED: dict[str, str] = {
@@ -73,91 +99,80 @@ _NOT_CONFIGURED: dict[str, str] = {
 # Private helpers
 # ---------------------------------------------------------------------------
 
-async def _find_vm_node(vmid: int) -> str:
-    """Locate which PVE node a VM lives on.
+async def _find_resource_node(vmid: int, resource_type: str) -> str:
+    """Locate which PVE node a VM or LXC container lives on.
 
-    Uses the cluster resources endpoint to find the VM without
+    Uses the cluster resources endpoint to find the resource without
     needing to iterate nodes manually.
 
     Args:
-        vmid: Proxmox VM ID.
+        vmid: Proxmox resource ID.
+        resource_type: Either ``"qemu"`` (VM) or ``"lxc"`` (container).
 
     Returns:
         Node name string.
 
     Raises:
-        ValueError: If the vmid is not found in the cluster.
+        ValueError: If the resource is not found in the cluster.
     """
+    label = "VM" if resource_type == "qemu" else "LXC container"
     resources = await _client.get("/cluster/resources?type=vm")
     for resource in resources:
-        if resource.get("vmid") == vmid and resource.get("type") == "qemu":
+        if resource.get("vmid") == vmid and resource.get("type") == resource_type:
             return resource["node"]
-    raise ValueError(f"VM {vmid} not found in cluster")
+    raise ValueError(f"{label} {vmid} not found in cluster")
+
+
+async def _find_vm_node(vmid: int) -> str:
+    """Locate which PVE node a VM lives on."""
+    return await _find_resource_node(vmid, "qemu")
 
 
 async def _find_ct_node(vmid: int) -> str:
-    """Locate which PVE node an LXC container lives on.
-
-    Uses the cluster resources endpoint (type=vm returns both qemu and lxc).
-    Filters by vmid AND type == "lxc" to avoid cross-matching with VMs.
-
-    Args:
-        vmid: Proxmox container ID.
-
-    Returns:
-        Node name string.
-
-    Raises:
-        ValueError: If the container is not found in the cluster.
-    """
-    resources = await _client.get("/cluster/resources?type=vm")
-    for resource in resources:
-        if resource.get("vmid") == vmid and resource.get("type") == "lxc":
-            return resource["node"]
-    raise ValueError(f"LXC container {vmid} not found in cluster")
+    """Locate which PVE node an LXC container lives on."""
+    return await _find_resource_node(vmid, "lxc")
 
 
 # ---------------------------------------------------------------------------
 # Public tool functions
 # ---------------------------------------------------------------------------
 
-async def list_vms() -> list[dict]:
+async def list_vms() -> list[VmSummary] | list[dict]:
     """Return all VMs with ID, name, status, and resource allocation.
 
     Queries every PVE node and aggregates the results.
 
     Returns:
-        List of dicts with keys: vmid, name, status, cpus, memory_mb.
+        List of VmSummary dicts.
     """
     if not proxmox_configured():
         return [_NOT_CONFIGURED]
 
     nodes = await _client.get_nodes()
-    vms: list[dict] = []
+    vms: list[VmSummary] = []
 
     for node in nodes:
         data = await _client.get(f"/nodes/{node}/qemu")
         for vm in data:
-            vms.append({
-                "vmid": vm["vmid"],
-                "name": vm.get("name", ""),
-                "status": vm.get("status", "unknown"),
-                "cpus": vm.get("cpus", 0),
-                "memory_mb": round(vm.get("maxmem", 0) / 1_048_576),
-            })
+            vms.append(VmSummary(
+                vmid=vm["vmid"],
+                name=vm.get("name", ""),
+                status=vm.get("status", "unknown"),
+                cpus=vm.get("cpus", 0),
+                memory_mb=round(vm.get("maxmem", 0) / _BYTES_PER_MB),
+            ))
 
     return vms
 
 
-async def get_vm_status(vmid: int) -> dict:
+async def get_vm_status(vmid: int) -> VmStatus | dict:
     """Return detailed status for a specific VM.
 
     Args:
         vmid: Proxmox VM ID.
 
     Returns:
-        Dict with keys: vmid, name, status, uptime_seconds,
-        cpu_usage_percent, memory_used_mb, memory_total_mb.
+        VmStatus dict with resource usage details.
     """
     if not proxmox_configured():
         return _NOT_CONFIGURED
@@ -165,15 +180,15 @@ async def get_vm_status(vmid: int) -> dict:
     node = await _find_vm_node(vmid)
     data = await _client.get(f"/nodes/{node}/qemu/{vmid}/status/current")
 
-    return {
-        "vmid": data["vmid"],
-        "name": data.get("name", ""),
-        "status": data.get("status", "unknown"),
-        "uptime_seconds": data.get("uptime", 0),
-        "cpu_usage_percent": round(data.get("cpu", 0.0) * 100, 2),
-        "memory_used_mb": round(data.get("mem", 0) / 1_048_576),
-        "memory_total_mb": round(data.get("maxmem", 0) / 1_048_576),
-    }
+    return VmStatus(
+        vmid=data["vmid"],
+        name=data.get("name", ""),
+        status=data.get("status", "unknown"),
+        uptime_seconds=data.get("uptime", 0),
+        cpu_usage_percent=round(data.get("cpu", 0.0) * 100, 2),
+        memory_used_mb=round(data.get("mem", 0) / _BYTES_PER_MB),
+        memory_total_mb=round(data.get("maxmem", 0) / _BYTES_PER_MB),
+    )
 
 
 async def start_vm(vmid: int) -> str:
@@ -237,7 +252,7 @@ async def list_lxc() -> list[LxcSummary] | list[dict]:
                 name=ct.get("name", ""),
                 status=ct.get("status", "unknown"),
                 cpus=ct.get("cpus", 0),
-                memory_mb=round(ct.get("maxmem", 0) / 1_048_576),
+                memory_mb=round(ct.get("maxmem", 0) / _BYTES_PER_MB),
                 type="lxc",
             ))
 
@@ -265,12 +280,12 @@ async def get_lxc_status(vmid: int) -> LxcStatus | dict:
         status=data.get("status", "unknown"),
         uptime_seconds=data.get("uptime", 0),
         cpu_usage_percent=round(data.get("cpu", 0.0) * 100, 2),
-        memory_used_mb=round(data.get("mem", 0) / 1_048_576),
-        memory_total_mb=round(data.get("maxmem", 0) / 1_048_576),
-        swap_used_mb=round(data.get("swap", 0) / 1_048_576),
-        swap_total_mb=round(data.get("maxswap", 0) / 1_048_576),
-        disk_used_gb=round(data.get("disk", 0) / 1_073_741_824, 2),
-        disk_total_gb=round(data.get("maxdisk", 0) / 1_073_741_824, 2),
+        memory_used_mb=round(data.get("mem", 0) / _BYTES_PER_MB),
+        memory_total_mb=round(data.get("maxmem", 0) / _BYTES_PER_MB),
+        swap_used_mb=round(data.get("swap", 0) / _BYTES_PER_MB),
+        swap_total_mb=round(data.get("maxswap", 0) / _BYTES_PER_MB),
+        disk_used_gb=round(data.get("disk", 0) / _BYTES_PER_GB, 2),
+        disk_total_gb=round(data.get("maxdisk", 0) / _BYTES_PER_GB, 2),
         type="lxc",
     )
 
@@ -355,7 +370,8 @@ async def create_lxc(
 
     if vmid is None:
         next_id = await get_next_vmid()
-        assert isinstance(next_id, int)  # guaranteed — proxmox_configured() passed
+        if not isinstance(next_id, int):
+            raise RuntimeError("get_next_vmid returned unexpected type")
         vmid = next_id
 
     rootfs = f"{storage}:{disk_gb}"
@@ -424,9 +440,9 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict
             storage=s.get("storage", ""),
             type=s.get("type", ""),
             content=s.get("content", ""),
-            total_gb=round(s.get("total", 0) / 1_073_741_824, 2),
-            used_gb=round(s.get("used", 0) / 1_073_741_824, 2),
-            avail_gb=round(s.get("avail", 0) / 1_073_741_824, 2),
+            total_gb=round(s.get("total", 0) / _BYTES_PER_GB, 2),
+            used_gb=round(s.get("used", 0) / _BYTES_PER_GB, 2),
+            avail_gb=round(s.get("avail", 0) / _BYTES_PER_GB, 2),
             active=s.get("active", 0) == 1,
         ))
 
@@ -470,7 +486,7 @@ async def list_templates(
         templates.append(TemplateInfo(
             volid=t.get("volid", ""),
             format=t.get("format", ""),
-            size_mb=round(t.get("size", 0) / 1_048_576, 2),
+            size_mb=round(t.get("size", 0) / _BYTES_PER_MB, 2),
         ))
 
     return templates

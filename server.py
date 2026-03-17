@@ -22,6 +22,7 @@ from mcp.server.fastmcp import FastMCP
 
 from tools import nodes, proxmox, opnsense, discovery, context_gen
 from tools.nodes import NodeSummary, NodeStatus, ContainerInfo
+from tools.proxmox import VmSummary, VmStatus
 
 mcp = FastMCP("homelab")
 
@@ -64,13 +65,13 @@ async def restart_container(hostname: str, container: str) -> str:
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
-async def list_vms() -> list[dict]:
+async def list_vms() -> list[VmSummary] | list[dict]:
     """List all VMs on the Proxmox hypervisor with status and resource info."""
     return await proxmox.list_vms()
 
 
 @mcp.tool()
-async def get_vm_status(vmid: int) -> dict:
+async def get_vm_status(vmid: int) -> VmStatus | dict:
     """Get detailed status for a specific Proxmox VM."""
     return await proxmox.get_vm_status(vmid)
 
@@ -115,6 +116,7 @@ async def stop_lxc(vmid: int) -> str:
     return await proxmox.stop_lxc(vmid)
 
 
+# Parameters must match tools.proxmox.create_lxc — keep in sync
 @mcp.tool()
 async def create_lxc(
     node: str,

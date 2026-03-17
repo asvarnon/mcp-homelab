@@ -12,6 +12,7 @@ import pytest
 
 from tools.proxmox import (
     _find_ct_node,
+    _find_resource_node,
     _find_vm_node,
     create_lxc,
     get_lxc_status,
@@ -208,6 +209,47 @@ class TestFindCtNode:
         ]
         with pytest.raises(ValueError, match="LXC container 100 not found"):
             await _find_ct_node(100)
+
+
+# ===========================================================================
+# _find_resource_node (shared helper)
+# ===========================================================================
+
+
+class TestFindResourceNode:
+    @pytest.mark.asyncio
+    async def test_finds_qemu_node(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = [
+            {"vmid": 100, "node": "pve", "type": "qemu"},
+        ]
+        assert await _find_resource_node(100, "qemu") == "pve"
+
+    @pytest.mark.asyncio
+    async def test_finds_lxc_node(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = [
+            {"vmid": 300, "node": "pve2", "type": "lxc"},
+        ]
+        assert await _find_resource_node(300, "lxc") == "pve2"
+
+    @pytest.mark.asyncio
+    async def test_raises_for_missing_qemu(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = []
+        with pytest.raises(ValueError, match="VM 999 not found"):
+            await _find_resource_node(999, "qemu")
+
+    @pytest.mark.asyncio
+    async def test_raises_for_missing_lxc(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = []
+        with pytest.raises(ValueError, match="LXC container 999 not found"):
+            await _find_resource_node(999, "lxc")
+
+    @pytest.mark.asyncio
+    async def test_does_not_cross_match_types(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = [
+            {"vmid": 100, "node": "pve", "type": "qemu"},
+        ]
+        with pytest.raises(ValueError, match="LXC container 100 not found"):
+            await _find_resource_node(100, "lxc")
 
 
 # ===========================================================================
