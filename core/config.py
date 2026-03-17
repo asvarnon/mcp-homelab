@@ -49,10 +49,17 @@ class OPNsenseConfig(BaseModel):
     verify_ssl: bool = False
 
 
+class ServerConfig(BaseModel):
+    transport: Literal["stdio", "http"] = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
+
+
 class AppConfig(BaseModel):
     hosts: dict[str, HostConfig] = Field(default_factory=dict)
     proxmox: ProxmoxConfig | None = None
     opnsense: OPNsenseConfig | None = None
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -132,6 +139,13 @@ def validate_env() -> None:
         for var in ("OPNSENSE_API_KEY", "OPNSENSE_API_SECRET"):
             if not os.environ.get(var):
                 missing.append(var)
+
+    if config.server.transport == "http":
+        bearer_token = os.environ.get("MCP_BEARER_TOKEN", "")
+        if not bearer_token:
+            missing.append("MCP_BEARER_TOKEN")
+        elif len(bearer_token) < 32:
+            missing.append("MCP_BEARER_TOKEN (must be at least 32 characters)")
 
     if missing:
         raise EnvironmentError(

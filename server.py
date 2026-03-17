@@ -219,7 +219,36 @@ async def list_context_files() -> dict:
 
 
 if __name__ == "__main__":
-    from core.config import load_env, validate_env
+    from core.config import load_config, load_env, validate_env
+
     load_env()
     validate_env()
-    mcp.run()
+
+    config = load_config()
+    if config.server.transport == "http":
+        from pydantic import AnyHttpUrl
+
+        from mcp.server.auth.settings import AuthSettings
+
+        from core.auth import StaticBearerVerifier
+
+        token = os.environ["MCP_BEARER_TOKEN"]
+        mcp.settings.host = config.server.host
+        mcp.settings.port = config.server.port
+        # AuthSettings URLs are required by the MCP SDK's OAuth metadata model
+        # but unused for static bearer-token auth. In production, deploy behind
+        # a TLS-terminating reverse proxy (Caddy/nginx) and update these to
+        # reflect the actual HTTPS URL clients connect to.
+        mcp.settings.auth = AuthSettings(
+            issuer_url=AnyHttpUrl(f"http://{config.server.host}:{config.server.port}"),
+            resource_server_url=AnyHttpUrl(
+                f"http://{config.server.host}:{config.server.port}"
+            ),
+        )
+        # NOTE: _token_verifier is a private FastMCP attribute. The integration
+        # test in test_auth.py verifies auth is enforced end-to-end, so any
+        # breakage from SDK updates will be caught immediately.
+        mcp._token_verifier = StaticBearerVerifier(token)
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run()
