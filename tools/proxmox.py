@@ -141,7 +141,7 @@ async def _find_ct_node(vmid: int) -> str:
 # Public tool functions
 # ---------------------------------------------------------------------------
 
-async def list_vms() -> list[VmSummary] | list[ProxmoxError]:
+async def list_vms() -> list[VmSummary] | list[dict]:
     """Return all VMs with ID, name, status, and resource allocation.
 
     Queries every PVE node and aggregates the results.
@@ -169,7 +169,7 @@ async def list_vms() -> list[VmSummary] | list[ProxmoxError]:
     return vms
 
 
-async def get_vm_status(vmid: int) -> VmStatus | ProxmoxError:
+async def get_vm_status(vmid: int) -> VmStatus | dict:
     """Return detailed status for a specific VM.
 
     Args:
@@ -234,7 +234,7 @@ async def stop_vm(vmid: int) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def list_lxc() -> list[LxcSummary] | list[ProxmoxError]:
+async def list_lxc() -> list[LxcSummary] | list[dict]:
     """Return all LXC containers with ID, name, status, and resource allocation.
 
     Queries every PVE node and aggregates the results.
@@ -263,7 +263,7 @@ async def list_lxc() -> list[LxcSummary] | list[ProxmoxError]:
     return containers
 
 
-async def get_lxc_status(vmid: int) -> LxcStatus | ProxmoxError:
+async def get_lxc_status(vmid: int) -> LxcStatus | dict:
     """Return detailed status for a specific LXC container.
 
     Args:
@@ -345,7 +345,7 @@ async def create_lxc(
     unprivileged: bool = True,
     start_after_create: bool = False,
     password: str | None = None,
-) -> LxcCreateResult | ProxmoxError:
+) -> LxcCreateResult | dict:
     """Create a new LXC container on a Proxmox node.
 
     Args:
@@ -410,7 +410,7 @@ async def create_lxc(
     return LxcCreateResult(vmid=vmid, node=node, task_id=task_id)
 
 
-async def get_next_vmid() -> int | ProxmoxError:
+async def get_next_vmid() -> int | dict:
     """Get the next available VM/CT ID from the Proxmox cluster.
 
     Returns:
@@ -423,7 +423,7 @@ async def get_next_vmid() -> int | ProxmoxError:
     return int(result)
 
 
-async def list_storage(node: str | None = None) -> list[StorageInfo] | list[ProxmoxError]:
+async def list_storage(node: str | None = None) -> list[StorageInfo] | list[dict]:
     """List available storage on a Proxmox node with capacity info.
 
     Args:
@@ -461,7 +461,7 @@ async def list_storage(node: str | None = None) -> list[StorageInfo] | list[Prox
 async def list_templates(
     node: str | None = None,
     storage: str | None = None,
-) -> list[TemplateInfo] | list[ProxmoxError]:
+) -> list[TemplateInfo] | list[dict]:
     """List available OS templates for LXC container creation.
 
     Args:
