@@ -235,15 +235,14 @@ if __name__ == "__main__":
         token = os.environ["MCP_BEARER_TOKEN"]
         mcp.settings.host = config.server.host
         mcp.settings.port = config.server.port
-        # AuthSettings URLs are required by the MCP SDK's OAuth metadata model
-        # but unused for static bearer-token auth. In production, deploy behind
-        # a TLS-terminating reverse proxy (Caddy/nginx) and update these to
-        # reflect the actual HTTPS URL clients connect to.
+        # Derive the public URL used for Host header validation metadata.
+        public_url = (
+            str(config.server.public_url) if config.server.public_url
+            else f"http://{config.server.host}:{config.server.port}"
+        )
         mcp.settings.auth = AuthSettings(
-            issuer_url=AnyHttpUrl(f"http://{config.server.host}:{config.server.port}"),
-            resource_server_url=AnyHttpUrl(
-                f"http://{config.server.host}:{config.server.port}"
-            ),
+            issuer_url=AnyHttpUrl(public_url),
+            resource_server_url=AnyHttpUrl(public_url),
         )
         # NOTE: _token_verifier is a private FastMCP attribute. The integration
         # test in test_auth.py verifies auth is enforced end-to-end, so any

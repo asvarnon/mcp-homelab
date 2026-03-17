@@ -5,6 +5,14 @@
 # Copy this file to config.yaml and fill in your infrastructure details:
 #   cp config.yaml.example config.yaml
 
+# Server transport settings - leave commented for stdio (default, used by Claude Desktop).
+# Uncomment for HTTP transport (remote deployments, LXC containers).
+# server:
+#   transport: http
+#   host: 10.10.10.111    # Bind address - use the host's actual IP, not 0.0.0.0
+#   port: 8000
+#   # public_url: http://10.10.10.111:8000  # Optional - set if host differs from client-facing address (e.g., behind reverse proxy)
+
 hosts:
   # Add your SSH-accessible hosts here.
   # Example:

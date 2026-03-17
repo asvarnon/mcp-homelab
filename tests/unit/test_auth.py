@@ -54,6 +54,7 @@ class TestServerConfig:
         assert config.transport == "stdio"
         assert config.host == "127.0.0.1"
         assert config.port == 8000
+        assert config.public_url is None
 
     def test_http_config(self) -> None:
         config = ServerConfig(transport="http")
@@ -67,21 +68,29 @@ class TestServerConfig:
 
 class TestValidateEnvHttpTransport:
     @staticmethod
-    def _write_http_only_config(config_dir: Path) -> None:
+    def _write_http_only_config(
+        config_dir: Path,
+        host: str = "127.0.0.1",
+        public_url: str | None = None,
+    ) -> None:
         yaml = YAML()
         config_path = config_dir / "config.yaml"
+        server_config: dict[str, str | int] = {
+            "transport": "http",
+            "host": host,
+            "port": 8000,
+        }
+        if public_url is not None:
+            server_config["public_url"] = public_url
+
         with open(config_path, "w", encoding="utf-8") as handle:
             yaml.dump(
                 {
-                    "server": {
-                        "transport": "http",
-                        "host": "127.0.0.1",
-                        "port": 8000,
-                    },
+                    "server": server_config,
                     "hosts": {
-                        "gamehost": {
-                            "hostname": "gamehost",
-                            "ip": "10.0.0.10",
+                        "test-node-1": {
+                            "hostname": "test-node-1",
+                            "ip": "198.51.100.10",
                         }
                     },
                 },
@@ -122,6 +131,62 @@ class TestValidateEnvHttpTransport:
         monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
+
+
+class TestPublicUrlValidation:
+    def test_wildcard_host_without_public_url_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """validate_env() raises when host=0.0.0.0 and no public_url is set."""
+        TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="0.0.0.0")
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
+
+        with pytest.raises(EnvironmentError, match="server.public_url"):
+            validate_env()
+
+    def test_wildcard_host_with_public_url_passes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """validate_env() succeeds when host=0.0.0.0 and public_url is set."""
+        TestValidateEnvHttpTransport._write_http_only_config(
+            tmp_path,
+            host="0.0.0.0",
+            public_url="http://203.0.113.111:8000",
+        )
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
+
+        validate_env()
+
+    def test_specific_host_without_public_url_passes(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """validate_env() succeeds when host is a specific IP and no public_url."""
+        TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="203.0.113.111")
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
+
+        validate_env()
+
+    def test_ipv6_wildcard_without_public_url_raises(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """validate_env() raises when host='::' and no public_url is set."""
+        TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="::")
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
+
+        with pytest.raises(EnvironmentError, match="server.public_url"):
+            validate_env()
 
 
 class TestAuthEnforcement:

@@ -47,7 +47,7 @@ class TestRunProxmoxSetup:
         config_path = _seed_config(tmp_path)
 
         # Mock all prompts in order: IP, port, verify_ssl, token_id, token_secret, test_connection
-        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "10.0.50.20")
+        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "192.0.2.20")
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_int", lambda *a, **kw: 8006)
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_yn", lambda *a, **kw: False)
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_str", lambda _: "admin@pam!mcp")
@@ -57,7 +57,7 @@ class TestRunProxmoxSetup:
 
         # Verify config.yaml
         data = _load_yaml(config_path)
-        assert data["proxmox"]["host"] == "10.0.50.20"
+        assert data["proxmox"]["host"] == "192.0.2.20"
         assert data["proxmox"]["port"] == 8006
         assert data["proxmox"]["verify_ssl"] is False
 
@@ -69,12 +69,12 @@ class TestRunProxmoxSetup:
     def test_preserves_existing_hosts(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            "hosts:\n  gamehost:\n    ip: 10.0.50.10\n",
+            "hosts:\n  test-node-1:\n    ip: 192.0.2.10\n",
             encoding="utf-8",
         )
         (tmp_path / ".env").write_text("", encoding="utf-8")
 
-        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "10.0.50.20")
+        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "192.0.2.20")
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_int", lambda *a, **kw: 8006)
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_yn", lambda *a, **kw: False)
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_str", lambda _: "admin@pam!mcp")
@@ -83,14 +83,14 @@ class TestRunProxmoxSetup:
         run_proxmox_setup(config_path=config_path)
 
         data = _load_yaml(config_path)
-        assert "gamehost" in data["hosts"]
-        assert data["proxmox"]["host"] == "10.0.50.20"
+        assert "test-node-1" in data["hosts"]
+        assert data["proxmox"]["host"] == "192.0.2.20"
 
     def test_runs_connection_test_when_accepted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_path = _seed_config(tmp_path)
         test_called = False
 
-        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "10.0.50.20")
+        monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_ip", lambda _: "192.0.2.20")
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_int", lambda *a, **kw: 8006)
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_str", lambda _: "admin@pam!mcp")
         monkeypatch.setattr("mcp_homelab.setup.proxmox_setup.prompt_secret", lambda _: "secret")
@@ -117,7 +117,7 @@ class TestProxmoxTestConnection:
                 return {"data": {"version": "8.2.4"}}
 
         monkeypatch.setattr("httpx.get", lambda *a, **kw: FakeResponse())
-        result = proxmox_test_connection("10.0.0.1", 8006, False, "id", "secret")
+        result = proxmox_test_connection("198.51.100.1", 8006, False, "id", "secret")
         assert "✓" in result
         assert "8.2.4" in result
 
@@ -126,7 +126,7 @@ class TestProxmoxTestConnection:
             status_code = 401
 
         monkeypatch.setattr("httpx.get", lambda *a, **kw: FakeResponse())
-        result = proxmox_test_connection("10.0.0.1", 8006, False, "id", "secret")
+        result = proxmox_test_connection("198.51.100.1", 8006, False, "id", "secret")
         assert "✗" in result
         assert "401" in result
 
@@ -135,7 +135,7 @@ class TestProxmoxTestConnection:
             raise ConnectionError("refused")
 
         monkeypatch.setattr("httpx.get", boom)
-        result = proxmox_test_connection("10.0.0.1", 8006, False, "id", "secret")
+        result = proxmox_test_connection("198.51.100.1", 8006, False, "id", "secret")
         assert "✗" in result
 
 
@@ -148,7 +148,7 @@ class TestRunOpnsenseSetup:
     def test_writes_config_and_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_path = _seed_config(tmp_path)
 
-        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "10.0.50.1")
+        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "192.0.2.1")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_yn", lambda *a, **kw: False)
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_str", lambda _: "api-key-123")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_secret", lambda _: "api-secret-456")
@@ -157,7 +157,7 @@ class TestRunOpnsenseSetup:
 
         # Verify config.yaml
         data = _load_yaml(config_path)
-        assert data["opnsense"]["host"] == "10.0.50.1"
+        assert data["opnsense"]["host"] == "192.0.2.1"
         assert data["opnsense"]["verify_ssl"] is False
 
         # Verify .env
@@ -168,13 +168,13 @@ class TestRunOpnsenseSetup:
     def test_preserves_existing_sections(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            "hosts:\n  pve:\n    ip: 10.0.50.20\n"
-            "proxmox:\n  host: 10.0.50.20\n  port: 8006\n",
+            "hosts:\n  test-node-2:\n    ip: 192.0.2.20\n"
+            "proxmox:\n  host: 192.0.2.20\n  port: 8006\n",
             encoding="utf-8",
         )
         (tmp_path / ".env").write_text("PROXMOX_TOKEN_ID=existing\n", encoding="utf-8")
 
-        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "10.0.50.1")
+        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "192.0.2.1")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_yn", lambda *a, **kw: False)
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_str", lambda _: "key")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_secret", lambda _: "secret")
@@ -182,8 +182,8 @@ class TestRunOpnsenseSetup:
         run_opnsense_setup(config_path=config_path)
 
         data = _load_yaml(config_path)
-        assert data["proxmox"]["host"] == "10.0.50.20"
-        assert data["opnsense"]["host"] == "10.0.50.1"
+        assert data["proxmox"]["host"] == "192.0.2.20"
+        assert data["opnsense"]["host"] == "192.0.2.1"
 
         env_content = (tmp_path / ".env").read_text()
         assert "PROXMOX_TOKEN_ID=existing" in env_content
@@ -192,7 +192,7 @@ class TestRunOpnsenseSetup:
         config_path = _seed_config(tmp_path)
         test_called = False
 
-        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "10.0.50.1")
+        monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_ip", lambda _: "192.0.2.1")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_str", lambda _: "key")
         monkeypatch.setattr("mcp_homelab.setup.opnsense_setup.prompt_secret", lambda _: "secret")
 
@@ -216,7 +216,7 @@ class TestOpnsenseTestConnection:
             status_code = 200
 
         monkeypatch.setattr("httpx.get", lambda *a, **kw: FakeResponse())
-        result = opnsense_test_connection("10.0.0.1", False, "key", "secret")
+        result = opnsense_test_connection("198.51.100.1", False, "key", "secret")
         assert "✓" in result
 
     def test_returns_error_on_non_200(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -224,7 +224,7 @@ class TestOpnsenseTestConnection:
             status_code = 403
 
         monkeypatch.setattr("httpx.get", lambda *a, **kw: FakeResponse())
-        result = opnsense_test_connection("10.0.0.1", False, "key", "secret")
+        result = opnsense_test_connection("198.51.100.1", False, "key", "secret")
         assert "✗" in result
         assert "403" in result
 
@@ -233,5 +233,5 @@ class TestOpnsenseTestConnection:
             raise ConnectionError("refused")
 
         monkeypatch.setattr("httpx.get", boom)
-        result = opnsense_test_connection("10.0.0.1", False, "key", "secret")
+        result = opnsense_test_connection("198.51.100.1", False, "key", "secret")
         assert "✗" in result

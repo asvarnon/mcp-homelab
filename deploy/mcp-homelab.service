@@ -1,0 +1,22 @@
+[Unit]
+Description=mcp-homelab MCP server
+After=network.target
+
+[Service]
+Type=simple
+User=mcp
+Group=mcp
+WorkingDirectory=/opt/mcp-homelab
+EnvironmentFile=/opt/mcp-homelab/.env
+ExecStart=/opt/mcp-homelab/.venv/bin/python server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/mcp-homelab
+
+[Install]
+WantedBy=multi-user.target

@@ -35,9 +35,9 @@ class TestGetDhcpLeases:
         mock_opnsense_client.get.return_value = {
             "rows": [
                 {
-                    "address": "10.0.50.10",
+                    "address": "192.0.2.10",
                     "mac": "aa:bb:cc:dd:ee:ff",
-                    "hostname": "gamehost",
+                    "hostname": "test-node-1",
                     "if": "lan",
                     "status": "online",
                     "starts": "2024-01-01",
@@ -47,9 +47,9 @@ class TestGetDhcpLeases:
         }
         result = await get_dhcp_leases()
         assert len(result) == 1
-        assert result[0]["ip"] == "10.0.50.10"
+        assert result[0]["ip"] == "192.0.2.10"
         assert result[0]["mac"] == "aa:bb:cc:dd:ee:ff"
-        assert result[0]["hostname"] == "gamehost"
+        assert result[0]["hostname"] == "test-node-1"
         assert result[0]["interface"] == "lan"
 
     @pytest.mark.asyncio
@@ -94,10 +94,10 @@ class TestGetInterfaceStatus:
     async def test_falls_back_to_ipv4_field(self, mock_opnsense_client) -> None:
         """Some OPNsense versions use 'ipv4' instead of 'addr4'."""
         mock_opnsense_client.get.return_value = [
-            {"name": "lan", "ipv4": "10.0.0.1"}
+            {"name": "lan", "ipv4": "198.51.100.1"}
         ]
         result = await get_interface_status()
-        assert result[0]["address"] == "10.0.0.1"
+        assert result[0]["address"] == "198.51.100.1"
 
     @pytest.mark.asyncio
     async def test_handles_dict_response(self, mock_opnsense_client) -> None:
@@ -124,7 +124,7 @@ class TestGetFirewallAliases:
                     "name": "blocked_hosts",
                     "type": "host",
                     "description": "Blocked IPs",
-                    "content": "10.0.0.1,10.0.0.2",
+                    "content": "198.51.100.1,198.51.100.2",
                     "enabled": "1",
                 },
             ]
@@ -132,7 +132,7 @@ class TestGetFirewallAliases:
         result = await get_firewall_aliases()
         assert len(result) == 1
         assert result[0]["name"] == "blocked_hosts"
-        assert result[0]["entries"] == ["10.0.0.1", "10.0.0.2"]
+        assert result[0]["entries"] == ["198.51.100.1", "198.51.100.2"]
 
     @pytest.mark.asyncio
     async def test_splits_newline_content(self, mock_opnsense_client) -> None:

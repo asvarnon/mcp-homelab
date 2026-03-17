@@ -125,12 +125,12 @@ class TestLoadJson:
         path = tmp_path / "mcp.json"
         path.write_text(
             '{\n'
-            '  "url": "https://pve.local:8006/api2/json" // proxmox\n'
+            '  "url": "https://test-node-2.local:8006/api2/json" // proxmox\n'
             '}\n',
             encoding="utf-8",
         )
         result = _load_json(path)
-        assert result["url"] == "https://pve.local:8006/api2/json"
+        assert result["url"] == "https://test-node-2.local:8006/api2/json"
 
     def test_preserves_file_paths_in_strings(self, tmp_path: Path) -> None:
         """Windows-style paths could confuse naive regex."""

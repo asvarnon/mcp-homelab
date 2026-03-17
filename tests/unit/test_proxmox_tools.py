@@ -54,7 +54,7 @@ def mock_proxmox_client(monkeypatch: pytest.MonkeyPatch):
 class TestListVms:
     @pytest.mark.asyncio
     async def test_aggregates_across_nodes(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = [
             {"vmid": 100, "name": "test-vm", "status": "running", "cpus": 2, "maxmem": 4294967296},
             {"vmid": 101, "name": "stopped-vm", "status": "stopped", "cpus": 1, "maxmem": 2147483648},
@@ -69,7 +69,7 @@ class TestListVms:
 
     @pytest.mark.asyncio
     async def test_empty_cluster(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = []
         result = await list_vms()
         assert result == []
@@ -77,7 +77,7 @@ class TestListVms:
     @pytest.mark.asyncio
     async def test_memory_conversion(self, mock_proxmox_client) -> None:
         """Proxmox returns memory in bytes — we convert to MB."""
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = [
             {"vmid": 100, "name": "vm", "status": "running", "cpus": 1, "maxmem": 1073741824},
         ]
@@ -96,8 +96,8 @@ class TestGetVmStatus:
         # First call: _find_vm_node uses /cluster/resources
         mock_proxmox_client.get.side_effect = [
             # /cluster/resources?type=vm
-            [{"vmid": 100, "node": "pve", "type": "qemu"}],
-            # /nodes/pve/qemu/100/status/current
+            [{"vmid": 100, "node": "test-node-2", "type": "qemu"}],
+            # /nodes/test-node-2/qemu/100/status/current
             {
                 "vmid": 100,
                 "name": "test-vm",
@@ -121,7 +121,7 @@ class TestGetVmStatus:
     async def test_cpu_percentage_conversion(self, mock_proxmox_client) -> None:
         """Proxmox returns CPU as 0.0–1.0 float — we convert to percentage."""
         mock_proxmox_client.get.side_effect = [
-            [{"vmid": 100, "node": "pve", "type": "qemu"}],
+            [{"vmid": 100, "node": "test-node-2", "type": "qemu"}],
             {"vmid": 100, "name": "vm", "status": "running", "cpu": 0.75, "mem": 0, "maxmem": 0},
         ]
         result = await get_vm_status(100)
@@ -137,14 +137,14 @@ class TestFindVmNode:
     @pytest.mark.asyncio
     async def test_finds_node(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 100, "node": "pve", "type": "qemu"},
-            {"vmid": 200, "node": "pve2", "type": "qemu"},
+            {"vmid": 100, "node": "test-node-2", "type": "qemu"},
+            {"vmid": 200, "node": "test-node-4", "type": "qemu"},
         ]
-        assert await _find_vm_node(200) == "pve2"
+        assert await _find_vm_node(200) == "test-node-4"
 
     @pytest.mark.asyncio
     async def test_raises_for_missing_vm(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get.return_value = [{"vmid": 100, "node": "pve", "type": "qemu"}]
+        mock_proxmox_client.get.return_value = [{"vmid": 100, "node": "test-node-2", "type": "qemu"}]
         with pytest.raises(ValueError, match="VM 999 not found"):
             await _find_vm_node(999)
 
@@ -193,21 +193,21 @@ class TestFindCtNode:
     @pytest.mark.asyncio
     async def test_finds_node(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 100, "node": "pve", "type": "lxc"},
-            {"vmid": 200, "node": "pve2", "type": "lxc"},
+            {"vmid": 100, "node": "test-node-2", "type": "lxc"},
+            {"vmid": 200, "node": "test-node-4", "type": "lxc"},
         ]
-        assert await _find_ct_node(200) == "pve2"
+        assert await _find_ct_node(200) == "test-node-4"
 
     @pytest.mark.asyncio
     async def test_raises_for_missing_ct(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get.return_value = [{"vmid": 100, "node": "pve", "type": "lxc"}]
+        mock_proxmox_client.get.return_value = [{"vmid": 100, "node": "test-node-2", "type": "lxc"}]
         with pytest.raises(ValueError, match="LXC container 999 not found"):
             await _find_ct_node(999)
 
     @pytest.mark.asyncio
     async def test_ignores_qemu_with_same_vmid(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 100, "node": "pve", "type": "qemu"},
+            {"vmid": 100, "node": "test-node-2", "type": "qemu"},
         ]
         with pytest.raises(ValueError, match="LXC container 100 not found"):
             await _find_ct_node(100)
@@ -222,16 +222,16 @@ class TestFindResourceNode:
     @pytest.mark.asyncio
     async def test_finds_qemu_node(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 100, "node": "pve", "type": "qemu"},
+            {"vmid": 100, "node": "test-node-2", "type": "qemu"},
         ]
-        assert await _find_resource_node(100, "qemu") == "pve"
+        assert await _find_resource_node(100, "qemu") == "test-node-2"
 
     @pytest.mark.asyncio
     async def test_finds_lxc_node(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 300, "node": "pve2", "type": "lxc"},
+            {"vmid": 300, "node": "test-node-4", "type": "lxc"},
         ]
-        assert await _find_resource_node(300, "lxc") == "pve2"
+        assert await _find_resource_node(300, "lxc") == "test-node-4"
 
     @pytest.mark.asyncio
     async def test_raises_for_missing_qemu(self, mock_proxmox_client) -> None:
@@ -248,7 +248,7 @@ class TestFindResourceNode:
     @pytest.mark.asyncio
     async def test_does_not_cross_match_types(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = [
-            {"vmid": 100, "node": "pve", "type": "qemu"},
+            {"vmid": 100, "node": "test-node-2", "type": "qemu"},
         ]
         with pytest.raises(ValueError, match="LXC container 100 not found"):
             await _find_resource_node(100, "lxc")
@@ -262,40 +262,40 @@ class TestFindResourceNode:
 class TestResolveDefaultNode:
     @pytest.mark.asyncio
     async def test_uses_configured_default_when_present(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
             "tools.proxmox.get_proxmox_config",
-            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve2"),
+            lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-4"),
         )
         result = await _resolve_default_node()
-        assert result == "pve2"
+        assert result == "test-node-4"
 
     @pytest.mark.asyncio
     async def test_falls_back_when_configured_default_missing(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
             "tools.proxmox.get_proxmox_config",
-            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve3"),
+            lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-3"),
         )
         result = await _resolve_default_node()
-        assert result == "pve"
+        assert result == "test-node-2"
 
     @pytest.mark.asyncio
     async def test_falls_back_when_default_node_not_set(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
             "tools.proxmox.get_proxmox_config",
-            lambda: ProxmoxConfig(host="10.10.10.50", default_node=None),
+            lambda: ProxmoxConfig(host="203.0.113.50", default_node=None),
         )
         result = await _resolve_default_node()
-        assert result == "pve"
+        assert result == "test-node-2"
 
     @pytest.mark.asyncio
     async def test_raises_when_cluster_has_no_nodes(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
         mock_proxmox_client.get_nodes.return_value = []
         monkeypatch.setattr(
             "tools.proxmox.get_proxmox_config",
-            lambda: ProxmoxConfig(host="10.10.10.50", default_node="pve"),
+            lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-2"),
         )
         with pytest.raises(ValueError, match="No Proxmox nodes found in cluster"):
             await _resolve_default_node()
@@ -309,7 +309,7 @@ class TestResolveDefaultNode:
 class TestListLxc:
     @pytest.mark.asyncio
     async def test_aggregates_across_nodes(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve", "pve2"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         mock_proxmox_client.get.side_effect = [
             [{"vmid": 300, "name": "ct-a", "status": "running", "cpus": 2, "maxmem": 1073741824}],
             [{"vmid": 301, "name": "ct-b", "status": "stopped", "cpus": 1, "maxmem": 536870912}],
@@ -322,14 +322,14 @@ class TestListLxc:
 
     @pytest.mark.asyncio
     async def test_empty_cluster(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = []
         result = await list_lxc()
         assert result == []
 
     @pytest.mark.asyncio
     async def test_memory_conversion(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = [
             {"vmid": 300, "name": "ct", "status": "running", "cpus": 1, "maxmem": 2147483648},
         ]
@@ -346,7 +346,7 @@ class TestGetLxcStatus:
     @pytest.mark.asyncio
     async def test_returns_formatted_status(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.side_effect = [
-            [{"vmid": 300, "node": "pve", "type": "lxc"}],
+            [{"vmid": 300, "node": "test-node-2", "type": "lxc"}],
             {
                 "vmid": 300,
                 "name": "test-ct",
@@ -378,7 +378,7 @@ class TestGetLxcStatus:
     @pytest.mark.asyncio
     async def test_cpu_percentage_conversion(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.side_effect = [
-            [{"vmid": 300, "node": "pve", "type": "lxc"}],
+            [{"vmid": 300, "node": "test-node-2", "type": "lxc"}],
             {"vmid": 300, "name": "ct", "status": "running", "cpu": 0.85, "mem": 0, "maxmem": 0, "swap": 0, "maxswap": 0, "disk": 0, "maxdisk": 0},
         ]
         result = await get_lxc_status(300)
@@ -393,8 +393,8 @@ class TestGetLxcStatus:
 class TestStartLxc:
     @pytest.mark.asyncio
     async def test_returns_confirmation(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get.return_value = [{"vmid": 300, "node": "pve", "type": "lxc"}]
-        mock_proxmox_client.post.return_value = "UPID:pve:00001234:00000000:65F00000:vzstart:300:root@pam:"
+        mock_proxmox_client.get.return_value = [{"vmid": 300, "node": "test-node-2", "type": "lxc"}]
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:00001234:00000000:65F00000:vzstart:300:root@pam:"
         result = await start_lxc(300)
         assert "LXC 300 start initiated" in result
         assert "UPID" in result
@@ -408,8 +408,8 @@ class TestStartLxc:
 class TestStopLxc:
     @pytest.mark.asyncio
     async def test_returns_confirmation(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get.return_value = [{"vmid": 300, "node": "pve", "type": "lxc"}]
-        mock_proxmox_client.post.return_value = "UPID:pve:00001234:00000000:65F00000:vzstop:300:root@pam:"
+        mock_proxmox_client.get.return_value = [{"vmid": 300, "node": "test-node-2", "type": "lxc"}]
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:00001234:00000000:65F00000:vzstop:300:root@pam:"
         result = await stop_lxc(300)
         assert "LXC 300 stop initiated" in result
         assert "UPID" in result
@@ -423,9 +423,9 @@ class TestStopLxc:
 class TestCreateLxc:
     @pytest.mark.asyncio
     async def test_builds_correct_payload(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         result = await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             hostname="test-ct",
@@ -436,12 +436,12 @@ class TestCreateLxc:
             storage="local-lvm",
         )
         assert result["vmid"] == 300
-        assert result["node"] == "pve"
-        assert result["task_id"] == "UPID:pve:create:300"
+        assert result["node"] == "test-node-2"
+        assert result["task_id"] == "UPID:test-node-2:create:300"
 
         # Verify the POST was called with the right data
         call_args = mock_proxmox_client.post.call_args
-        assert call_args[0][0] == "/nodes/pve/lxc"
+        assert call_args[0][0] == "/nodes/test-node-2/lxc"
         posted_data = call_args[1]["data"] if "data" in call_args[1] else call_args[0][1]
         assert posted_data["vmid"] == 300
         assert posted_data["ostemplate"] == "local:vztmpl/debian-12.tar.zst"
@@ -456,9 +456,9 @@ class TestCreateLxc:
     @pytest.mark.asyncio
     async def test_auto_assigns_vmid(self, mock_proxmox_client) -> None:
         mock_proxmox_client.get.return_value = 400
-        mock_proxmox_client.post.return_value = "UPID:pve:create:400"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:400"
         result = await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
         )
         assert result["vmid"] == 400
@@ -466,9 +466,9 @@ class TestCreateLxc:
 
     @pytest.mark.asyncio
     async def test_net0_with_vlan(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             vlan_tag=50,
@@ -478,9 +478,9 @@ class TestCreateLxc:
 
     @pytest.mark.asyncio
     async def test_net0_without_vlan(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
         )
@@ -490,9 +490,9 @@ class TestCreateLxc:
 
     @pytest.mark.asyncio
     async def test_optional_ssh_key(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             ssh_public_key="ssh-ed25519 AAAA... user@host",
@@ -502,9 +502,9 @@ class TestCreateLxc:
 
     @pytest.mark.asyncio
     async def test_optional_password(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             password="s3cret",
@@ -518,18 +518,18 @@ class TestCreateLxc:
         monkeypatch: pytest.MonkeyPatch,
         mock_proxmox_client,
     ) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         monkeypatch.setattr(
             "tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(
-                host="10.10.10.50",
+                host="203.0.113.50",
                 default_storage="local",
                 default_bridge="vmbr1",
             ),
         )
 
         await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             storage=None,
@@ -546,7 +546,7 @@ class TestCreateLxcValidation:
     async def test_rejects_zero_cores(self) -> None:
         with pytest.raises(ValueError, match=r"cores must be >= 1, got 0"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 cores=0,
@@ -556,7 +556,7 @@ class TestCreateLxcValidation:
     async def test_rejects_negative_memory(self) -> None:
         with pytest.raises(ValueError, match=r"memory_mb must be >= 16, got -1"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 memory_mb=-1,
@@ -566,7 +566,7 @@ class TestCreateLxcValidation:
     async def test_rejects_negative_swap(self) -> None:
         with pytest.raises(ValueError, match=r"swap_mb must be >= 0, got -1"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 swap_mb=-1,
@@ -576,7 +576,7 @@ class TestCreateLxcValidation:
     async def test_rejects_zero_disk(self) -> None:
         with pytest.raises(ValueError, match=r"disk_gb must be >= 1, got 0"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 disk_gb=0,
@@ -586,7 +586,7 @@ class TestCreateLxcValidation:
     async def test_rejects_vlan_below_range(self) -> None:
         with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 0"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 vlan_tag=0,
@@ -596,7 +596,7 @@ class TestCreateLxcValidation:
     async def test_rejects_vlan_above_range(self) -> None:
         with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 4095"):
             await create_lxc(
-                node="pve",
+                node="test-node-2",
                 ostemplate="local:vztmpl/debian-12.tar.zst",
                 vmid=300,
                 vlan_tag=4095,
@@ -604,10 +604,10 @@ class TestCreateLxcValidation:
 
     @pytest.mark.asyncio
     async def test_accepts_valid_vlan(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.post.return_value = "UPID:pve:create:300"
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
 
         result = await create_lxc(
-            node="pve",
+            node="test-node-2",
             ostemplate="local:vztmpl/debian-12.tar.zst",
             vmid=300,
             vlan_tag=50,
@@ -651,7 +651,7 @@ class TestListStorage:
                 "active": 1,
             },
         ]
-        result = await list_storage(node="pve")
+        result = await list_storage(node="test-node-2")
         assert len(result) == 1
         assert result[0]["storage"] == "local-lvm"
         assert result[0]["total_gb"] == 100.0
@@ -661,7 +661,7 @@ class TestListStorage:
 
     @pytest.mark.asyncio
     async def test_defaults_to_first_node(self, mock_proxmox_client) -> None:
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.return_value = []
         result = await list_storage()
         assert result == []
@@ -679,7 +679,7 @@ class TestListTemplates:
         mock_proxmox_client.get.return_value = [
             {"volid": "local:vztmpl/debian-12.tar.zst", "format": "tar.zst", "size": 131072000},
         ]
-        result = await list_templates(node="pve", storage="local")
+        result = await list_templates(node="test-node-2", storage="local")
         assert len(result) == 1
         assert result[0]["volid"] == "local:vztmpl/debian-12.tar.zst"
         assert result[0]["format"] == "tar.zst"
@@ -688,7 +688,7 @@ class TestListTemplates:
     @pytest.mark.asyncio
     async def test_defaults_to_first_storage_with_vztmpl(self, mock_proxmox_client) -> None:
         # First call: get_nodes, second call: list_storage (node/storage), third call: content
-        mock_proxmox_client.get_nodes.return_value = ["pve"]
+        mock_proxmox_client.get_nodes.return_value = ["test-node-2"]
         mock_proxmox_client.get.side_effect = [
             # get_nodes already mocked above, first get = list_storage
             [
@@ -698,7 +698,7 @@ class TestListTemplates:
             # content query
             [{"volid": "local:vztmpl/ubuntu-22.tar.zst", "format": "tar.zst", "size": 262144000}],
         ]
-        result = await list_templates(node="pve")
+        result = await list_templates(node="test-node-2")
         assert len(result) == 1
         assert result[0]["volid"] == "local:vztmpl/ubuntu-22.tar.zst"
 
@@ -707,7 +707,7 @@ class TestListTemplates:
         mock_proxmox_client.get.return_value = [
             {"volid": "nfs:vztmpl/alpine.tar.gz", "format": "tar.gz", "size": 5242880},
         ]
-        result = await list_templates(node="pve", storage="nfs")
+        result = await list_templates(node="test-node-2", storage="nfs")
         assert len(result) == 1
         assert result[0]["volid"] == "nfs:vztmpl/alpine.tar.gz"
 
@@ -747,7 +747,7 @@ class TestLxcNotConfigured:
 
     @pytest.mark.asyncio
     async def test_create_lxc_returns_error(self) -> None:
-        result = await create_lxc(node="pve", ostemplate="local:vztmpl/debian.tar.zst")
+        result = await create_lxc(node="test-node-2", ostemplate="local:vztmpl/debian.tar.zst")
         assert isinstance(result, dict)
         assert "error" in result
 

@@ -14,7 +14,7 @@ import warnings
 
 from ruamel.yaml import YAML
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
 
 class HostConfig(BaseModel):
@@ -53,6 +53,7 @@ class ServerConfig(BaseModel):
     transport: Literal["stdio", "http"] = "stdio"
     host: str = "127.0.0.1"
     port: int = 8000
+    public_url: AnyHttpUrl | None = None
 
 
 class AppConfig(BaseModel):
@@ -115,6 +116,9 @@ def load_env() -> None:
     load_dotenv(get_config_dir() / ".env")
 
 
+_WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})
+
+
 def validate_env() -> None:
     """Check that required environment variables are set.
 
@@ -146,6 +150,13 @@ def validate_env() -> None:
             missing.append("MCP_BEARER_TOKEN")
         elif len(bearer_token) < 32:
             missing.append("MCP_BEARER_TOKEN (must be at least 32 characters)")
+
+        if config.server.host in _WILDCARD_HOSTS and config.server.public_url is None:
+            raise EnvironmentError(
+                "server.host is '0.0.0.0' (all interfaces) but server.public_url is not set. "
+                "The MCP SDK requires a valid public URL for Host header validation. "
+                "Set server.public_url to the URL clients will use (e.g., 'http://203.0.113.111:8000')."
+            )
 
     if missing:
         raise EnvironmentError(

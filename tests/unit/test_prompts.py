@@ -40,17 +40,17 @@ class TestPromptStr:
 
 class TestPromptIp:
     def test_valid_ipv4(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("builtins.input", lambda _: "10.0.50.10")
-        assert prompt_ip("IP") == "10.0.50.10"
+        monkeypatch.setattr("builtins.input", lambda _: "192.0.2.10")
+        assert prompt_ip("IP") == "192.0.2.10"
 
     def test_valid_ipv6(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("builtins.input", lambda _: "::1")
         assert prompt_ip("IP") == "::1"
 
     def test_rejects_invalid_then_accepts(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        inputs = iter(["not.an.ip", "10.0.0.1"])
+        inputs = iter(["not.an.ip", "198.51.100.1"])
         monkeypatch.setattr("builtins.input", lambda _: next(inputs))
-        assert prompt_ip("IP") == "10.0.0.1"
+        assert prompt_ip("IP") == "198.51.100.1"
 
     def test_uses_default_on_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("builtins.input", lambda _: "")
@@ -128,7 +128,7 @@ class TestNodeNameRegex:
     """Tests the regex pattern used by prompt_node_name."""
 
     def test_valid_names(self) -> None:
-        for name in ("gamehost", "pve", "my-server", "node_1", "A1"):
+        for name in ("test-node-1", "test-node-2", "my-server", "node_1", "A1"):
             assert _NODE_NAME_RE.match(name), f"Should accept: {name}"
 
     def test_rejects_starting_with_number(self) -> None:
@@ -146,8 +146,8 @@ class TestNodeNameRegex:
 
 class TestPromptNodeName:
     def test_valid_name(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("builtins.input", lambda _: "gamehost")
-        assert prompt_node_name("Node name") == "gamehost"
+        monkeypatch.setattr("builtins.input", lambda _: "test-node-1")
+        assert prompt_node_name("Node name") == "test-node-1"
 
     def test_rejects_then_accepts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         inputs = iter(["1bad", "good-name"])
@@ -156,7 +156,7 @@ class TestPromptNodeName:
 
     def test_uses_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr("builtins.input", lambda _: "")
-        assert prompt_node_name("Node name", default="pve") == "pve"
+        assert prompt_node_name("Node name", default="test-node-2") == "test-node-2"
 
 
 class TestPromptSecret:
