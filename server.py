@@ -240,6 +240,8 @@ if __name__ == "__main__":
 
         mcp.settings.host = config.server.host
         mcp.settings.port = config.server.port
+        # Claude.ai posts to "/" not "/mcp" — serve the MCP endpoint at root.
+        mcp.settings.streamable_http_path = "/"
 
         # Derive the public URL used for OAuth metadata and Host header
         # validation.  HTTPS public_url is expected once a TLS terminator
