@@ -22,7 +22,10 @@ def _ensure_linux() -> None:
 
 def _ensure_root() -> None:
     """Exit if the current process is not running as root."""
-    if os.geteuid() != 0:
+    # geteuid() is Unix-only; _ensure_linux() guards this call at runtime.
+    # Use getattr to satisfy Pylance on Windows where the attr doesn't exist.
+    euid: int = getattr(os, "geteuid", lambda: -1)()
+    if euid != 0:
         print("  ✗ this command must be run as root (sudo)", file=sys.stderr)
         sys.exit(1)
 
