@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import base64
-import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -16,10 +15,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--host", required=True, help="Target LXC IP address")
     parser.add_argument(
-        "--token",
-        required=False,
-        default=None,
-        help="Bearer token for MCP auth (min 32 chars). Falls back to MCP_DEPLOY_TOKEN env var.",
+        "--cf-tunnel-token",
+        required=True,
+        help="Cloudflare Tunnel connector token from Zero Trust dashboard",
+    )
+    parser.add_argument(
+        "--public-url",
+        required=True,
+        help="Public HTTPS URL for the server (e.g. https://mcp.example.com)",
     )
     parser.add_argument(
         "--branch",
@@ -153,23 +156,12 @@ def _ensure_ssh_key(ssh_key: Path) -> None:
     print("SSH key generated.")
 
 
-def _mask_token(token: str) -> str:
-    return f"{token[:4]}....{token[-4:]}"
-
-
 def main() -> int:
     args: argparse.Namespace = parse_args()
 
-    token: str | None = args.token or os.environ.get("MCP_DEPLOY_TOKEN")
-    if not token:
-        print("ERROR: --token or MCP_DEPLOY_TOKEN env var is required", file=sys.stderr)
-        return 2
-
-    if len(token) < 32:
-        print("ERROR: --token must be at least 32 characters", file=sys.stderr)
-        return 2
-
     host: str = args.host
+    cf_tunnel_token: str = args.cf_tunnel_token.strip()
+    public_url: str = args.public_url.strip()
     branch: str = args.branch
     ssh_key: Path = Path(args.ssh_key).expanduser()
     ssh_user: str = args.ssh_user
@@ -180,6 +172,18 @@ def main() -> int:
     pve_key_str: str | None = args.pve_key
     vmid: int = args.vmid
     bootstrap_enabled: bool = pve_host is not None
+
+    if not cf_tunnel_token:
+        print("ERROR: --cf-tunnel-token must not be empty", file=sys.stderr)
+        return 2
+
+    if not public_url:
+        print("ERROR: --public-url must not be empty", file=sys.stderr)
+        return 2
+
+    if not public_url.startswith("https://"):
+        print("ERROR: --public-url must start with https://", file=sys.stderr)
+        return 2
 
     if bootstrap_enabled:
         missing_pve: list[str] = []
@@ -194,11 +198,7 @@ def main() -> int:
     pve_key: Path = Path(pve_key_str).expanduser() if pve_key_str else Path()
     # Narrow types after validation — guaranteed non-None when bootstrap_enabled
     pve_user_resolved: str = pve_user or ""
-    total_steps: int = 12 if bootstrap_enabled else 11
-
-    if "\n" in token or "\r" in token:
-        print("ERROR: --token must not contain newline characters", file=sys.stderr)
-        return 2
+    total_steps: int = 14 if bootstrap_enabled else 13
 
     if bootstrap_enabled:
         print(f"Step 0/{total_steps}: Bootstrapping SSH in LXC via Proxmox")
@@ -241,7 +241,21 @@ def main() -> int:
         "install system packages",
     )
 
-    print(f"Step 4/{total_steps}: Creating service user")
+    print(f"Step 4/{total_steps}: Installing cloudflared")
+    _run_ssh_command(
+        host,
+        ssh_key,
+        ssh_user,
+        "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | "
+        "gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg && "
+        "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
+        "https://pkg.cloudflare.com/cloudflared any main' > "
+        "/etc/apt/sources.list.d/cloudflared.list && "
+        "apt-get update && apt-get install -y cloudflared",
+        "install cloudflared",
+    )
+
+    print(f"Step 5/{total_steps}: Creating service user")
     _run_ssh_command(
         host,
         ssh_key,
@@ -250,7 +264,7 @@ def main() -> int:
         "create mcp service user",
     )
 
-    print(f"Step 5/{total_steps}: Cloning or updating repository")
+    print(f"Step 6/{total_steps}: Cloning or updating repository")
     branch_quoted: str = shlex.quote(branch)
     repo_url_quoted: str = shlex.quote(repo_url)
     repo_command: str = (
@@ -263,7 +277,7 @@ def main() -> int:
     )
     _run_ssh_command(host, ssh_key, ssh_user, repo_command, "clone or update repository")
 
-    print(f"Step 6/{total_steps}: Creating virtual environment and installing dependencies")
+    print(f"Step 7/{total_steps}: Creating virtual environment and installing dependencies")
     _run_ssh_command(
         host,
         ssh_key,
@@ -279,12 +293,13 @@ def main() -> int:
         "install Python dependencies",
     )
 
-    print(f"Step 7/{total_steps}: Writing config.yaml")
+    print(f"Step 8/{total_steps}: Writing config.yaml")
     config_content: str = (
         "server:\n"
         "  transport: http\n"
         f"  host: \"{host}\"\n"
         f"  port: {port}\n"
+        f"  public_url: \"{public_url}\"\n"
         "\n"
         "hosts: {}\n"
     )
@@ -296,8 +311,8 @@ def main() -> int:
         "/opt/mcp-homelab/config.yaml",
     )
 
-    print(f"Step 8/{total_steps}: Writing .env")
-    env_content: str = f"MCP_BEARER_TOKEN={token}\n"
+    print(f"Step 9/{total_steps}: Writing .env")
+    env_content: str = "MCP_HOMELAB_CONFIG_DIR=/opt/mcp-homelab\n"
     _transfer_file(
         host,
         ssh_key,
@@ -313,7 +328,7 @@ def main() -> int:
         "set ownership and permissions",
     )
 
-    print(f"Step 9/{total_steps}: Installing systemd unit")
+    print(f"Step 10/{total_steps}: Installing systemd unit")
     service_path: Path = Path(__file__).resolve().parent / "mcp-homelab.service"
     service_content: str = service_path.read_text(encoding="utf-8")
     _transfer_file(
@@ -338,7 +353,7 @@ def main() -> int:
         "enable mcp-homelab service",
     )
 
-    print(f"Step 10/{total_steps}: Starting service")
+    print(f"Step 11/{total_steps}: Starting service")
     _run_ssh_command(
         host,
         ssh_key,
@@ -365,10 +380,27 @@ def main() -> int:
     print("Recent logs:")
     print(logs_output)
 
-    print(f"Step 11/{total_steps}: Deployment summary")
-    print(f"Server running at http://{host}:{port}/mcp")
-    print(f"Bearer token: {_mask_token(token)}")
-    print(f"Logs: ssh root@{host} journalctl -u mcp-homelab -f")
+    print(f"Step 12/{total_steps}: Installing and starting cloudflared service")
+    cf_token_quoted: str = shlex.quote(cf_tunnel_token)
+    _run_ssh_command(
+        host,
+        ssh_key,
+        ssh_user,
+        f"cloudflared service install {cf_token_quoted}",
+        "install cloudflared tunnel service",
+    )
+    _run_ssh_command(
+        host,
+        ssh_key,
+        ssh_user,
+        "systemctl enable --now cloudflared",
+        "enable and start cloudflared service",
+    )
+
+    print(f"Step 13/{total_steps}: Deployment summary")
+    print(f"MCP server:     http://{host}:{port}/mcp (local)")
+    print(f"Public URL:     {public_url}")
+    print(f"Tunnel status:  ssh {ssh_user}@{host} systemctl status cloudflared")
     return 0
 
 
