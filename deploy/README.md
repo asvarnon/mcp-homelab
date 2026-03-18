@@ -4,28 +4,29 @@ Automated deployment of mcp-homelab to an LXC container with Cloudflare Tunnel f
 
 ## Prerequisites
 
-| Requirement                 | Detail                                                                                                           |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| **SSH access**              | Root SSH to the target LXC (key-based, or bootstrapped via `--pve-host`)                                         |
-| **Passwordless sudo**       | The SSH user must have passwordless `sudo` for `apt-get install`, `systemctl`, and `cloudflared service install` |
-| **Cloudflare Tunnel token** | Create a tunnel in Cloudflare Zero Trust dashboard → Tunnels → Create → get the connector token                  |
-| **Public URL**              | The HTTPS hostname you configure in the tunnel's public hostname tab (e.g. `https://mcp.example.com`)            |
+| Requirement                 | Detail                                                                                                                    |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| **Root SSH access**         | Root SSH to the target LXC (key-based, or bootstrapped via `--pve-host` which also installs the deploy key automatically) |
+| **Cloudflare Tunnel token** | Create a tunnel in Cloudflare Zero Trust dashboard → Tunnels → Create → get the connector token                           |
+| **Public URL**              | The HTTPS hostname you configure in the tunnel's public hostname tab (e.g. `https://mcp.example.com`)                     |
 
 ## Usage
 
 ```bash
+export CF_TUNNEL_TOKEN="eyJhIjoi..."
 python deploy/deploy.py \
   --host 10.10.10.111 \
-  --cf-tunnel-token "eyJhIjoi..." \
   --public-url "https://mcp.example.com"
 ```
+
+The tunnel token is read from `CF_TUNNEL_TOKEN` env var (preferred) or `--cf-tunnel-token`. Avoid passing the token on the command line — it will appear in shell history and process listings.
 
 ### With Proxmox bootstrap (first deploy)
 
 ```bash
+export CF_TUNNEL_TOKEN="eyJhIjoi..."
 python deploy/deploy.py \
   --host 10.10.10.111 \
-  --cf-tunnel-token "eyJhIjoi..." \
   --public-url "https://mcp.example.com" \
   --pve-host 10.10.10.10 \
   --pve-user root \
@@ -38,7 +39,7 @@ python deploy/deploy.py \
 | Argument            | Required | Default                       | Description                                   |
 | ------------------- | -------- | ----------------------------- | --------------------------------------------- |
 | `--host`            | Yes      | —                             | Target LXC IP address                         |
-| `--cf-tunnel-token` | Yes      | —                             | Cloudflare Tunnel connector token             |
+| `--cf-tunnel-token` | No       | `CF_TUNNEL_TOKEN` env var     | Cloudflare Tunnel connector token             |
 | `--public-url`      | Yes      | —                             | Public HTTPS URL (must start with `https://`) |
 | `--branch`          | No       | `develop`                     | Git branch to deploy                          |
 | `--ssh-key`         | No       | `~/.ssh/mcp-server-bootstrap` | SSH private key path                          |
@@ -52,7 +53,7 @@ python deploy/deploy.py \
 
 ## What it deploys
 
-1. System packages (python3, git)
+1. System packages (python3, git, curl, gnupg, ca-certificates)
 2. `cloudflared` (via Cloudflare apt repo)
 3. Service user (`mcp`)
 4. Git clone/pull of mcp-homelab

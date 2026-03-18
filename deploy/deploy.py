@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -16,8 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--host", required=True, help="Target LXC IP address")
     parser.add_argument(
         "--cf-tunnel-token",
-        required=True,
-        help="Cloudflare Tunnel connector token from Zero Trust dashboard",
+        help="Cloudflare Tunnel connector token from Zero Trust dashboard (or set CF_TUNNEL_TOKEN)",
     )
     parser.add_argument(
         "--public-url",
@@ -160,7 +160,7 @@ def main() -> int:
     args: argparse.Namespace = parse_args()
 
     host: str = args.host
-    cf_tunnel_token: str = args.cf_tunnel_token.strip()
+    cf_tunnel_token: str = (args.cf_tunnel_token or os.environ.get("CF_TUNNEL_TOKEN", "")).strip()
     public_url: str = args.public_url.strip()
     branch: str = args.branch
     ssh_key: Path = Path(args.ssh_key).expanduser()
@@ -174,7 +174,7 @@ def main() -> int:
     bootstrap_enabled: bool = pve_host is not None
 
     if not cf_tunnel_token:
-        print("ERROR: --cf-tunnel-token must not be empty", file=sys.stderr)
+        print("ERROR: set --cf-tunnel-token or CF_TUNNEL_TOKEN", file=sys.stderr)
         return 2
 
     if not public_url:
@@ -199,9 +199,14 @@ def main() -> int:
     # Narrow types after validation — guaranteed non-None when bootstrap_enabled
     pve_user_resolved: str = pve_user or ""
     total_steps: int = 14 if bootstrap_enabled else 13
+    current_step: int = 1
+
+    print(f"Step {current_step}/{total_steps}: Checking SSH key")
+    _ensure_ssh_key(ssh_key)
+    current_step += 1
 
     if bootstrap_enabled:
-        print(f"Step 0/{total_steps}: Bootstrapping SSH in LXC via Proxmox")
+        print(f"Step {current_step}/{total_steps}: Bootstrapping SSH in LXC via Proxmox")
         bootstrap_inner_command: str = (
             "apt-get update && apt-get install -y openssh-server && "
             "systemctl enable --now ssh"
@@ -217,12 +222,27 @@ def main() -> int:
             bootstrap_command,
             f"bootstrap openssh-server in LXC VMID {vmid}",
         )
+
+        pub_key_content: str = ssh_key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+        key_install_command: str = (
+            f"sudo pct exec {vmid_quoted} -- bash -c "
+            + shlex.quote(
+                f"mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
+                f"echo {shlex.quote(pub_key_content)} >> /root/.ssh/authorized_keys && "
+                f"chmod 600 /root/.ssh/authorized_keys"
+            )
+        )
+        _run_ssh_command(
+            pve_host,
+            pve_key,
+            pve_user_resolved,
+            key_install_command,
+            f"install SSH public key in LXC VMID {vmid}",
+        )
         print(f"Bootstrap complete for VMID {vmid} via PVE host {pve_host}.")
+        current_step += 1
 
-    print(f"Step 1/{total_steps}: Checking SSH key")
-    _ensure_ssh_key(ssh_key)
-
-    print(f"Step 2/{total_steps}: Verifying SSH connectivity")
+    print(f"Step {current_step}/{total_steps}: Verifying SSH connectivity")
     hostname_output: str = _run_ssh_command(
         host,
         ssh_key,
@@ -231,17 +251,19 @@ def main() -> int:
         "verify SSH connectivity",
     )
     print(f"SSH connectivity OK. Remote hostname: {hostname_output}")
+    current_step += 1
 
-    print(f"Step 3/{total_steps}: Installing system packages")
+    print(f"Step {current_step}/{total_steps}: Installing system packages")
     _run_ssh_command(
         host,
         ssh_key,
         ssh_user,
-        "apt-get update && apt-get install -y python3 python3-pip python3-venv git",
+        "apt-get update && apt-get install -y python3 python3-pip python3-venv git curl gnupg ca-certificates",
         "install system packages",
     )
+    current_step += 1
 
-    print(f"Step 4/{total_steps}: Installing cloudflared")
+    print(f"Step {current_step}/{total_steps}: Installing cloudflared")
     _run_ssh_command(
         host,
         ssh_key,
@@ -254,8 +276,9 @@ def main() -> int:
         "apt-get update && apt-get install -y cloudflared",
         "install cloudflared",
     )
+    current_step += 1
 
-    print(f"Step 5/{total_steps}: Creating service user")
+    print(f"Step {current_step}/{total_steps}: Creating service user")
     _run_ssh_command(
         host,
         ssh_key,
@@ -263,8 +286,9 @@ def main() -> int:
         "id -u mcp >/dev/null 2>&1 || useradd --system --no-create-home --shell /usr/sbin/nologin mcp",
         "create mcp service user",
     )
+    current_step += 1
 
-    print(f"Step 6/{total_steps}: Cloning or updating repository")
+    print(f"Step {current_step}/{total_steps}: Cloning or updating repository")
     branch_quoted: str = shlex.quote(branch)
     repo_url_quoted: str = shlex.quote(repo_url)
     repo_command: str = (
@@ -276,8 +300,9 @@ def main() -> int:
         "fi"
     )
     _run_ssh_command(host, ssh_key, ssh_user, repo_command, "clone or update repository")
+    current_step += 1
 
-    print(f"Step 7/{total_steps}: Creating virtual environment and installing dependencies")
+    print(f"Step {current_step}/{total_steps}: Creating virtual environment and installing dependencies")
     _run_ssh_command(
         host,
         ssh_key,
@@ -292,8 +317,9 @@ def main() -> int:
         "/opt/mcp-homelab/.venv/bin/pip install -r /opt/mcp-homelab/requirements.txt",
         "install Python dependencies",
     )
+    current_step += 1
 
-    print(f"Step 8/{total_steps}: Writing config.yaml")
+    print(f"Step {current_step}/{total_steps}: Writing config.yaml")
     config_content: str = (
         "server:\n"
         "  transport: http\n"
@@ -310,8 +336,9 @@ def main() -> int:
         config_content,
         "/opt/mcp-homelab/config.yaml",
     )
+    current_step += 1
 
-    print(f"Step 9/{total_steps}: Writing .env")
+    print(f"Step {current_step}/{total_steps}: Writing .env")
     env_content: str = "MCP_HOMELAB_CONFIG_DIR=/opt/mcp-homelab\n"
     _transfer_file(
         host,
@@ -327,8 +354,9 @@ def main() -> int:
         "chown -R mcp:mcp /opt/mcp-homelab && chmod 400 /opt/mcp-homelab/.env",
         "set ownership and permissions",
     )
+    current_step += 1
 
-    print(f"Step 10/{total_steps}: Installing systemd unit")
+    print(f"Step {current_step}/{total_steps}: Installing systemd unit")
     service_path: Path = Path(__file__).resolve().parent / "mcp-homelab.service"
     service_content: str = service_path.read_text(encoding="utf-8")
     _transfer_file(
@@ -352,8 +380,9 @@ def main() -> int:
         "systemctl enable mcp-homelab",
         "enable mcp-homelab service",
     )
+    current_step += 1
 
-    print(f"Step 11/{total_steps}: Starting service")
+    print(f"Step {current_step}/{total_steps}: Starting service")
     _run_ssh_command(
         host,
         ssh_key,
@@ -379,16 +408,35 @@ def main() -> int:
     )
     print("Recent logs:")
     print(logs_output)
+    current_step += 1
 
-    print(f"Step 12/{total_steps}: Installing and starting cloudflared service")
-    cf_token_quoted: str = shlex.quote(cf_tunnel_token)
-    _run_ssh_command(
+    print(f"Step {current_step}/{total_steps}: Installing and starting cloudflared service")
+    # Token is piped via stdin to avoid exposure in local process listings.
+    # The remote cloudflared process briefly shows the token in its argv —
+    # acceptable on a single-tenant root-only LXC (cloudflared has no
+    # --token-file or env-var alternative for `service install`).
+    cf_install_cmd: list[str] = _build_ssh_command(
         host,
         ssh_key,
         ssh_user,
-        f"cloudflared service install {cf_token_quoted}",
-        "install cloudflared tunnel service",
+        'read -r CF_TOKEN && cloudflared service install "$CF_TOKEN"',
     )
+    cf_result: subprocess.CompletedProcess[str] = subprocess.run(
+        cf_install_cmd,
+        input=cf_tunnel_token + "\n",
+        capture_output=True,
+        text=True,
+        check=False,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if cf_result.returncode != 0:
+        print("ERROR: install cloudflared tunnel service", file=sys.stderr)
+        if cf_result.stderr:
+            print(cf_result.stderr.strip(), file=sys.stderr)
+        elif cf_result.stdout:
+            print(cf_result.stdout.strip(), file=sys.stderr)
+        sys.exit(cf_result.returncode)
     _run_ssh_command(
         host,
         ssh_key,
@@ -396,8 +444,9 @@ def main() -> int:
         "systemctl enable --now cloudflared",
         "enable and start cloudflared service",
     )
+    current_step += 1
 
-    print(f"Step 13/{total_steps}: Deployment summary")
+    print(f"Step {current_step}/{total_steps}: Deployment summary")
     print(f"MCP server:     http://{host}:{port}/mcp (local)")
     print(f"Public URL:     {public_url}")
     print(f"Tunnel status:  ssh {ssh_user}@{host} systemctl status cloudflared")
