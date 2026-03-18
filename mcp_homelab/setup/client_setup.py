@@ -87,6 +87,14 @@ def _server_entry_stdio() -> dict:
     }
 
 
+def _server_entry_http(url: str) -> dict[str, str]:
+    """Build the MCP server entry for HTTP transport."""
+    return {
+        "url": url,
+        "transport": "streamable-http",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Config file writers
 # ---------------------------------------------------------------------------
@@ -142,13 +150,13 @@ def _write_json(path: Path, data: dict) -> None:
     tmp.replace(path)
 
 
-def upsert_claude_desktop(dry_run: bool = False) -> str | None:
+def upsert_claude_desktop(dry_run: bool = False, url: str | None = None) -> str | None:
     """Add or update the homelab server entry in Claude Desktop config.
 
     Returns the generated JSON snippet if dry_run=True, otherwise writes
     the file and returns None.
     """
-    entry = _server_entry_stdio()
+    entry = _server_entry_http(url) if url is not None else _server_entry_stdio()
 
     if dry_run:
         snippet = {"mcpServers": {"homelab": entry}}
@@ -167,13 +175,13 @@ def upsert_claude_desktop(dry_run: bool = False) -> str | None:
     return None
 
 
-def upsert_vscode(dry_run: bool = False) -> str | None:
+def upsert_vscode(dry_run: bool = False, url: str | None = None) -> str | None:
     """Add or update the homelab server entry in .vscode/mcp.json.
 
     Returns the generated JSON snippet if dry_run=True, otherwise writes
     the file and returns None.
     """
-    entry = _server_entry_stdio()
+    entry = _server_entry_http(url) if url is not None else _server_entry_stdio()
 
     if dry_run:
         snippet = {"servers": {"homelab": entry}}
@@ -213,10 +221,14 @@ _CLIENTS: list[ClientTarget] = [
 ]
 
 
-def run_client_setup(dry_run: bool = False) -> None:
+def run_client_setup(dry_run: bool = False, url: str | None = None) -> None:
     """Interactive MCP client configuration."""
     print()
     print("─── MCP Client Setup ───")
+    if url:
+        print(f"Mode: HTTP (remote server at {url})")
+    else:
+        print("Mode: stdio (local server)")
     print()
 
     # Detect available clients
@@ -259,13 +271,13 @@ def run_client_setup(dry_run: bool = False) -> None:
 
     for name, path, writer_fn in targets:
         if dry_run:
-            snippet = writer_fn(dry_run=True)
+            snippet = writer_fn(dry_run=True, url=url)
             print(f"── {name} ──")
             print(snippet)
             print()
         else:
             try:
-                writer_fn()
+                writer_fn(url=url)
 
                 print(f"  → Updated {name} config ✓")
             except Exception as e:

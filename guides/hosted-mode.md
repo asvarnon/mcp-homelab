@@ -57,30 +57,32 @@ mcp-homelab setup check               # Validate all connections
 
 ### Step 3 — Install as a service
 
-Convert the local installation into a systemd service running in HTTP mode.
+Convert the local installation into a systemd service running in HTTP mode:
 
-| Command               | What it does                                                                                      | Status                         |
-| --------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `mcp-homelab install` | Creates service user, installs systemd unit, switches transport to HTTP, enables + starts service | **TODO — not yet implemented** |
+```bash
+sudo mcp-homelab install --public-url "https://mcp.example.com"
+```
 
-> **Until `mcp-homelab install` exists**, follow the manual steps in your platform guide (e.g., [Proxmox LXC + Cloudflare Tunnel — Step 4](proxmox-cloudflare-tunnel.md#step-4-install-as-a-service)). The manual steps cover the same operations.
+Or omit `--public-url` and the command will prompt for it interactively.
 
-#### What `install` should automate
+| Command               | What it does                                                                                      | Status     |
+| --------------------- | ------------------------------------------------------------------------------------------------- | ---------- |
+| `mcp-homelab install` | Creates service user, installs systemd unit, switches transport to HTTP, enables + starts service | **Exists** |
 
-| #   | Action                  | Detail                                                                         | Currently handled by                                 |
-| --- | ----------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------- |
-| 1   | Create service user     | `useradd --system --create-home --shell /usr/sbin/nologin mcp`                 | deploy.py step 6 (but uses `--no-create-home` — bug) |
-| 2   | Set file ownership      | `chown -R mcp:mcp /opt/mcp-homelab` (or install path)                          | deploy.py (implicit)                                 |
-| 3   | Update config transport | Set `server.transport: http` in config.yaml                                    | deploy.py step 9 (writes new file)                   |
-| 4   | Prompt for public URL   | Ask the user for their public-facing URL (needed for OAuth)                    | deploy.py `--public-url` arg                         |
-| 5   | Update config server    | Set `server.host: "0.0.0.0"`, `server.port: 8000`, `server.public_url`         | deploy.py step 9                                     |
-| 6   | Install systemd unit    | Copy `mcp-homelab.service` → `/etc/systemd/system/`, `systemctl daemon-reload` | deploy.py step 11                                    |
-| 7   | Enable + start service  | `systemctl enable --now mcp-homelab`                                           | deploy.py step 12                                    |
-| 8   | Print next steps        | Tell user how to make the server reachable (reverse proxy, tunnel, firewall)   | Not done by deploy.py                                |
+#### What `install` automates (10 steps)
 
-#### What `install` should NOT do
+1. Verify Linux + root privileges
+2. Detect install path (from running code location)
+3. Create `mcp` service user (`useradd --system --create-home`)
+4. Set file ownership (`chown -R mcp:mcp`)
+5. Resolve public HTTPS URL (from `--public-url` arg or interactive prompt)
+6. Update `config.yaml` — `transport: http`, `host: 0.0.0.0`, `port: 8000`, `public_url`
+7. Render and install systemd unit (`deploy/mcp-homelab.service` template)
+8. `systemctl daemon-reload` + `enable` + `start`
+9. Verify service is active
+10. Print next steps (network accessibility, guides reference)
 
-These are environment-specific and belong in platform guides (see [guides/](./)):
+#### What `install` does NOT do
 
 - Create the machine (VM, LXC, bare-metal provisioning)
 - Install/configure Cloudflare Tunnel, Tailscale, Caddy, nginx, etc.
@@ -104,21 +106,19 @@ This is where the [platform guides](./) come in. Choose your method:
 Point each MCP client at the server's HTTP URL:
 
 ```bash
-# On each client machine:
+# On each client machine — use --url for remote HTTP mode:
+mcp-homelab setup client --url "https://mcp.example.com"
+
+# Or omit --url for local stdio mode (the default):
 mcp-homelab setup client
 ```
 
-| Command                    | What it does                                      | Status                                                        |
-| -------------------------- | ------------------------------------------------- | ------------------------------------------------------------- |
-| `mcp-homelab setup client` | Writes client config for Claude Desktop / VS Code | **Exists** — currently writes stdio only; needs HTTP/URL mode |
+| Command                                | What it does                                             | Status     |
+| -------------------------------------- | -------------------------------------------------------- | ---------- |
+| `mcp-homelab setup client`             | Writes stdio transport entry (local server)              | **Exists** |
+| `mcp-homelab setup client --url <url>` | Writes HTTP transport entry (remote server at given URL) | **Exists** |
 
-> **Gap:** `setup client` currently only writes stdio transport entries. For hosted mode, it needs to accept a `--url` flag and write an HTTP transport entry instead. This is a separate enhancement.
-
-**Manual workaround until `--url` is implemented:**
-
-For Claude.ai (web/mobile), add the server as a custom MCP integration at `https://claude.ai/settings/integrations` using your public URL (e.g., `https://mcp.example.com`). No local client config changes needed — Claude.ai connects directly over HTTP.
-
-For Claude Desktop or VS Code connecting to a remote server, manually edit the client config JSON to use HTTP transport instead of stdio.
+For Claude.ai (web/mobile), no client config is needed — add the server as a custom MCP integration at `https://claude.ai/settings/integrations` using your public URL.
 
 ### Step 6 — Validate
 
@@ -144,7 +144,7 @@ For remote validation, connect from a client and run a tool (e.g., `list_nodes`)
 | Validate config           | `mcp-homelab setup check`    | Full     |
 | Start server (dev)        | `mcp-homelab serve`          | Full     |
 
-### New — needs implementation
+### Newly implemented
 
 | Function                   | CLI Command                            | Scope                                                                |
 | -------------------------- | -------------------------------------- | -------------------------------------------------------------------- |
@@ -177,6 +177,6 @@ For remote validation, connect from a client and run a tool (e.g., `list_nodes`)
 | Cloudflare Tunnel setup   | [proxmox-cloudflare-tunnel.md](proxmox-cloudflare-tunnel.md) guide    |
 | Proxmox LXC SSH bootstrap | [proxmox-cloudflare-tunnel.md](proxmox-cloudflare-tunnel.md) guide    |
 
-**Action:** `deploy.py` remains the working deployment path until `mcp-homelab install` is implemented. Once `install` exists, move `deploy/deploy.py` to `examples/deploy-reference.py` as a historical reference. Keep `deploy/mcp-homelab.service` — the `install` command will reference it.
+**Action:** Now that `mcp-homelab install` exists, `deploy.py` can be moved to `examples/deploy-reference.py` as a historical reference. The `deploy/mcp-homelab.service` template stays — the `install` command reads it.
 
 > **Note:** The systemd unit at `deploy/mcp-homelab.service` assumes `/opt/mcp-homelab/` as the install path. If installing elsewhere, edit the `WorkingDirectory`, `EnvironmentFile`, and `ExecStart` paths before copying.

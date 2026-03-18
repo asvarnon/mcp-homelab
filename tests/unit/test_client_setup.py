@@ -16,6 +16,7 @@ import pytest
 from mcp_homelab.setup.client_setup import (
     _claude_desktop_config_path,
     _load_json,
+    _server_entry_http,
     _server_entry_stdio,
     _strip_jsonc_comments,
     _windows_claude_config_path,
@@ -285,6 +286,18 @@ class TestServerEntryStdio:
         assert entry["command"] == str(venv_python)
 
 
+class TestServerEntryHttp:
+    def test_returns_url_and_transport(self) -> None:
+        entry = _server_entry_http("https://mcp.example.com")
+        assert entry["url"] == "https://mcp.example.com"
+        assert entry["transport"] == "streamable-http"
+
+    def test_url_preserved_exactly(self) -> None:
+        url = "https://mcp.example.com/path?x=1&y=two"
+        entry = _server_entry_http(url)
+        assert entry["url"] == url
+
+
 # ===========================================================================
 # upsert_claude_desktop
 # ===========================================================================
@@ -340,6 +353,34 @@ class TestUpsertClaudeDesktop:
                 upsert_claude_desktop(dry_run=False)
 
 
+class TestUpsertClaudeDesktopHttp:
+    def test_dry_run_http(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        result = upsert_claude_desktop(dry_run=True, url="https://mcp.example.com")
+        assert result is not None
+        data = json.loads(result)
+        entry = data["mcpServers"]["homelab"]
+        assert entry["url"] == "https://mcp.example.com"
+        assert entry["transport"] == "streamable-http"
+
+    def test_writes_http_entry(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        config_file = tmp_path / "claude_desktop_config.json"
+
+        with patch(
+            "mcp_homelab.setup.client_setup._claude_desktop_config_path",
+            return_value=config_file,
+        ):
+            result = upsert_claude_desktop(dry_run=False, url="https://mcp.example.com")
+            assert result is None
+            data = json.loads(config_file.read_text())
+            entry = data["mcpServers"]["homelab"]
+            assert entry["url"] == "https://mcp.example.com"
+            assert entry["transport"] == "streamable-http"
+            assert "command" not in entry
+            assert "args" not in entry
+
+
 # ===========================================================================
 # upsert_vscode
 # ===========================================================================
@@ -374,3 +415,30 @@ class TestUpsertVscode:
 
         mcp_json = tmp_path / ".vscode" / "mcp.json"
         assert mcp_json.exists()
+
+
+class TestUpsertVscodeHttp:
+    def test_dry_run_http(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        result = upsert_vscode(dry_run=True, url="https://mcp.example.com")
+        assert result is not None
+        data = json.loads(result)
+        entry = data["servers"]["homelab"]
+        assert entry["url"] == "https://mcp.example.com"
+        assert entry["transport"] == "streamable-http"
+
+    def test_writes_http_entry(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+        vscode_dir = tmp_path / ".vscode"
+        vscode_dir.mkdir()
+
+        upsert_vscode(dry_run=False, url="https://mcp.example.com")
+
+        mcp_json = vscode_dir / "mcp.json"
+        assert mcp_json.exists()
+        data = json.loads(mcp_json.read_text())
+        entry = data["servers"]["homelab"]
+        assert entry["url"] == "https://mcp.example.com"
+        assert entry["transport"] == "streamable-http"
+        assert "command" not in entry
+        assert "args" not in entry
