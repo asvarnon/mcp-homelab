@@ -43,6 +43,7 @@ class TestRunInstall:
         monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
         monkeypatch.setattr("mcp_homelab.setup.install.os.geteuid", lambda: 0, raising=False)
         monkeypatch.setattr("mcp_homelab.setup.install._detect_install_path", lambda: install_path)
+        # Stub out the service template write (writes to /etc/systemd which needs root)
         monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *args: None)
         monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
 
@@ -96,24 +97,28 @@ class TestRunInstall:
         assert data["server"]["port"] == 8000
         assert data["server"]["public_url"] == "https://mcp.example.com"
 
-    def test_generates_systemd_unit(self, tmp_path: Path) -> None:
+    def test_renders_systemd_unit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         install_path = tmp_path / "custom-install"
-        template_path = tmp_path / "mcp-homelab.service.template"
         output_path = tmp_path / "mcp-homelab.service"
-        template_path.write_text(
+
+        from unittest.mock import MagicMock
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
             "WorkingDirectory=/opt/mcp-homelab\n"
             "EnvironmentFile=/opt/mcp-homelab/.env\n"
-            "ExecStart=/opt/mcp-homelab/.venv/bin/python server.py\n",
-            encoding="utf-8",
+            "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
         )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
 
-        _write_systemd_unit(template_path, install_path, output_path)
+        _write_systemd_unit(install_path, output_path)
 
         rendered = output_path.read_text(encoding="utf-8")
         assert "/opt/mcp-homelab" not in rendered
         assert f"WorkingDirectory={install_path}" in rendered
         assert f"EnvironmentFile={install_path}/.env" in rendered
-        assert f"ExecStart={install_path}/.venv/bin/python server.py" in rendered
+        assert f"ExecStart={install_path}/.venv/bin/mcp-homelab serve" in rendered
 
     def test_public_url_from_arg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         input_mock = MagicMock(side_effect=RuntimeError("input should not be called"))
@@ -136,15 +141,6 @@ def _seed_install_tree(base_path: Path) -> Path:
     """Create a minimal install tree used by run_install tests."""
     install_path = base_path / "mcp-homelab"
     install_path.mkdir(parents=True)
-    (install_path / "server.py").write_text("print('ok')\n", encoding="utf-8")
+    (install_path / "pyproject.toml").write_text("[project]\nname = 'mcp-homelab'\n", encoding="utf-8")
     (install_path / "config.yaml").write_text("hosts: {}\n", encoding="utf-8")
-
-    deploy_dir = install_path / "deploy"
-    deploy_dir.mkdir(parents=True)
-    (deploy_dir / "mcp-homelab.service").write_text(
-        "WorkingDirectory=/opt/mcp-homelab\n"
-        "EnvironmentFile=/opt/mcp-homelab/.env\n"
-        "ExecStart=/opt/mcp-homelab/.venv/bin/python server.py\n",
-        encoding="utf-8",
-    )
     return install_path

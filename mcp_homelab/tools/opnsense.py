@@ -8,10 +8,12 @@ All functions use OPNsenseClient for transport — no direct httpx usage here.
 from __future__ import annotations
 
 import ipaddress
-from typing import Any, TypedDict
+from typing import Any
 
-from core.config import load_config, opnsense_configured
-from core.opnsense_api import OPNsenseAPIError, OPNsenseClient
+from typing_extensions import TypedDict
+
+from mcp_homelab.core.config import load_config, opnsense_configured
+from mcp_homelab.core.opnsense_api import OPNsenseAPIError, OPNsenseClient
 
 _client = OPNsenseClient()
 

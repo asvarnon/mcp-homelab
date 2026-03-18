@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from core.config import get_proxmox_token, load_config
+from mcp_homelab.core.config import get_proxmox_token, load_config
 
 logger = logging.getLogger(__name__)
 

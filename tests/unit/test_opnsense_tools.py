@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from core.config import AppConfig, HostConfig
-from tools.opnsense import (
+from mcp_homelab.core.config import AppConfig, HostConfig
+from mcp_homelab.tools.opnsense import (
     check_ip_available,
     get_dhcp_leases,
     get_firewall_aliases,
@@ -24,9 +24,9 @@ def mock_opnsense_client(monkeypatch: pytest.MonkeyPatch):
 
     mock_client = MagicMock()
     mock_client.get = AsyncMock()
-    monkeypatch.setattr("tools.opnsense._client", mock_client)
+    monkeypatch.setattr("mcp_homelab.tools.opnsense._client", mock_client)
     # Default: OPNsense is configured (happy path)
-    monkeypatch.setattr("tools.opnsense.opnsense_configured", lambda: True)
+    monkeypatch.setattr("mcp_homelab.tools.opnsense.opnsense_configured", lambda: True)
     return mock_client
 
 
@@ -176,7 +176,7 @@ class TestCheckIpAvailable:
     async def test_available_ip(self, mock_opnsense_client, monkeypatch) -> None:
         """IP with no DHCP lease and no config entry is available."""
         mock_opnsense_client.get.return_value = {"rows": []}
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: _empty_config())
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
         result = await check_ip_available("10.10.10.200")
         assert result["available"] is True
         assert result["conflicts"] == []
@@ -198,7 +198,7 @@ class TestCheckIpAvailable:
                 },
             ]
         }
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: _empty_config())
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
         result = await check_ip_available("10.10.10.101")
         assert result["available"] is False
         assert len(result["conflicts"]) == 1
@@ -214,7 +214,7 @@ class TestCheckIpAvailable:
             proxmox=None,
             opnsense=None,
         )
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: config)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
         result = await check_ip_available("10.50.50.10")
         assert result["available"] is False
         assert len(result["conflicts"]) == 1
@@ -232,7 +232,7 @@ class TestCheckIpAvailable:
             proxmox=None,
             opnsense=None,
         )
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: config)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
         result = await check_ip_available("10.10.10.101")
         assert result["available"] is False
         assert len(result["conflicts"]) == 2
@@ -250,7 +250,7 @@ class TestCheckIpAvailable:
             proxmox=None,
             opnsense=None,
         )
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: config)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
         result = await check_ip_available("10.10.10.200")
         assert result["available"] is True
         assert result["conflicts"] == []
@@ -261,7 +261,7 @@ class TestCheckIpAvailable:
         mock_opnsense_client.get.return_value = {
             "rows": [{"address": "10.10.10.5", "hostname": "router", "mac": "ff:ff:ff:00:00:01", "status": "online"}]
         }
-        monkeypatch.setattr("tools.opnsense.load_config", _raise_config_error)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", _raise_config_error)
         result = await check_ip_available("10.10.10.5")
         assert result["available"] is False
         assert len(result["conflicts"]) == 1
@@ -274,7 +274,7 @@ class TestCheckIpAvailable:
     async def test_config_load_failure_no_dhcp_conflict(self, mock_opnsense_client, monkeypatch) -> None:
         """Config failure with clean DHCP returns available=True but with warning."""
         mock_opnsense_client.get.return_value = {"rows": []}
-        monkeypatch.setattr("tools.opnsense.load_config", _raise_config_error)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", _raise_config_error)
         result = await check_ip_available("10.10.10.200")
         assert result["available"] is True
         assert len(result["warnings"]) == 1
@@ -309,7 +309,7 @@ class TestCheckIpAvailable:
     async def test_normalizes_whitespace(self, mock_opnsense_client, monkeypatch) -> None:
         """Leading/trailing whitespace is stripped before validation."""
         mock_opnsense_client.get.return_value = {"rows": []}
-        monkeypatch.setattr("tools.opnsense.load_config", lambda: _empty_config())
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
         result = await check_ip_available("  10.10.10.200  ")
         assert result["available"] is True
         assert result["ip"] == "10.10.10.200"
@@ -333,7 +333,7 @@ class TestOPNsenseNotConfigured:
 
     @pytest.fixture(autouse=True)
     def disable_opnsense(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("tools.opnsense.opnsense_configured", lambda: False)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.opnsense_configured", lambda: False)
 
     @pytest.mark.asyncio
     async def test_get_dhcp_leases_returns_error(self) -> None:

@@ -12,8 +12,8 @@ import re
 from typing import Any
 from typing_extensions import TypedDict
 
-from core.config import AppConfig, load_config
-from core.ssh import SSHManager
+from mcp_homelab.core.config import AppConfig, load_config
+from mcp_homelab.core.ssh import SSHManager
 
 
 class FilesystemInfo(TypedDict):

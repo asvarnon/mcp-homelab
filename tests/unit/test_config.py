@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.config import (
+from mcp_homelab.core.config import (
     AppConfig,
     HostConfig,
     OPNsenseConfig,

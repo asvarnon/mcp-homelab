@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from core.config import AppConfig, get_config_dir, load_config
+from mcp_homelab.core.config import AppConfig, get_config_dir, load_config
 from mcp_homelab.setup.ssh_helpers import SSHConnectError, connect, detect_capabilities
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.resources
 import os
 import platform
 import subprocess
@@ -31,13 +32,30 @@ def _ensure_root() -> None:
 
 
 def _detect_install_path() -> Path:
-    """Resolve and validate the local installation root path."""
-    install_path = Path(__file__).resolve().parent.parent.parent
-    server_path = install_path / "server.py"
-    if not server_path.exists():
-        print(f"  ✗ could not find server.py at {server_path}", file=sys.stderr)
+    """Resolve and validate the local installation root path.
+
+    Walks up from this file's location looking for ``pyproject.toml``.
+    Does NOT fall back to cwd — the project root must be unambiguous
+    to avoid chown -R on an unintended directory.
+    """
+    candidate = Path(__file__).resolve().parent.parent.parent
+    if (candidate / "pyproject.toml").exists():
+        return candidate
+    print("  ✗ could not locate project root (no pyproject.toml found)", file=sys.stderr)
+    print("    run this command from a git clone of mcp-homelab", file=sys.stderr)
+    sys.exit(1)
+
+
+def _validate_path_safe(path: Path) -> None:
+    """Reject paths containing characters unsafe for systemd unit substitution."""
+    import re
+    path_str = str(path)
+    if re.search(r'[\n\r\0]', path_str):
+        print("  ✗ install path contains control characters", file=sys.stderr)
         sys.exit(1)
-    return install_path
+    if not re.match(r'^[A-Za-z0-9/_.\\ :-]+$', path_str):
+        print(f"  ✗ install path contains unsafe characters: {path_str}", file=sys.stderr)
+        sys.exit(1)
 
 
 def _run_command(command: list[str], step_name: str) -> subprocess.CompletedProcess[str]:
@@ -87,9 +105,11 @@ def _update_server_config(config_path: Path, public_url: str) -> None:
         yaml.dump(data, file)
 
 
-def _write_systemd_unit(template_path: Path, install_path: Path, output_path: Path) -> None:
-    """Render and write the systemd unit file using the install path."""
-    template = template_path.read_text(encoding="utf-8")
+def _write_systemd_unit(install_path: Path, output_path: Path) -> None:
+    """Load the bundled service template, render it, and write to output_path."""
+    _validate_path_safe(install_path)
+    service_ref = importlib.resources.files("mcp_homelab.data").joinpath("mcp-homelab.service")
+    template = service_ref.read_text(encoding="utf-8")
     rendered = template.replace("/opt/mcp-homelab", str(install_path))
     output_path.write_text(rendered, encoding="utf-8")
 
@@ -145,12 +165,8 @@ def run_install(public_url: str | None = None) -> None:
     print("  → config.yaml updated (HTTP mode) ✓")
 
     print("[8/10] Installing systemd unit...")
-    template_path = install_path / "deploy" / "mcp-homelab.service"
-    if not template_path.exists():
-        print(f"  ✗ service template not found at {template_path}", file=sys.stderr)
-        sys.exit(1)
     service_path = Path("/etc/systemd/system/mcp-homelab.service")
-    _write_systemd_unit(template_path, install_path, service_path)
+    _write_systemd_unit(install_path, service_path)
     print(f"  → wrote {service_path} ✓")
 
     print("[9/10] Enabling and starting service...")

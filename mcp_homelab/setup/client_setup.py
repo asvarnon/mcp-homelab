@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable, NamedTuple
 
-from core.config import get_config_dir
+from mcp_homelab.core.config import get_config_dir
 
 
 # ---------------------------------------------------------------------------

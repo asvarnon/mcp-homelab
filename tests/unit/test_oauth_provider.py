@@ -16,7 +16,7 @@ from mcp.server.auth.provider import (
 )
 from mcp.shared.auth import OAuthClientInformationFull
 
-from core.oauth_provider import (
+from mcp_homelab.core.oauth_provider import (
     ACCESS_TOKEN_TTL,
     AUTH_CODE_TTL,
     MAX_AUTH_CODES,

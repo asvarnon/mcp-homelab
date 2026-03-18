@@ -9,9 +9,9 @@ Java comparison: Testing a Spring Service layer with a mocked repository.
 from __future__ import annotations
 
 import pytest
-from core.config import ProxmoxConfig
+from mcp_homelab.core.config import ProxmoxConfig
 
-from tools.proxmox import (
+from mcp_homelab.tools.proxmox import (
     _find_ct_node,
     _resolve_default_node,
     _find_resource_node,
@@ -40,9 +40,9 @@ def mock_proxmox_client(monkeypatch: pytest.MonkeyPatch):
     mock_client.get = AsyncMock()
     mock_client.post = AsyncMock()
     mock_client.get_nodes = AsyncMock()
-    monkeypatch.setattr("tools.proxmox._client", mock_client)
+    monkeypatch.setattr("mcp_homelab.tools.proxmox._client", mock_client)
     # Default: Proxmox is configured (happy path)
-    monkeypatch.setattr("tools.proxmox.proxmox_configured", lambda: True)
+    monkeypatch.setattr("mcp_homelab.tools.proxmox.proxmox_configured", lambda: True)
     return mock_client
 
 
@@ -159,7 +159,7 @@ class TestProxmoxNotConfigured:
 
     @pytest.fixture(autouse=True)
     def disable_proxmox(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("tools.proxmox.proxmox_configured", lambda: False)
+        monkeypatch.setattr("mcp_homelab.tools.proxmox.proxmox_configured", lambda: False)
 
     @pytest.mark.asyncio
     async def test_list_vms_returns_error(self) -> None:
@@ -264,7 +264,7 @@ class TestResolveDefaultNode:
     async def test_uses_configured_default_when_present(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
         mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
-            "tools.proxmox.get_proxmox_config",
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-4"),
         )
         result = await _resolve_default_node()
@@ -274,7 +274,7 @@ class TestResolveDefaultNode:
     async def test_falls_back_when_configured_default_missing(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
         mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
-            "tools.proxmox.get_proxmox_config",
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-3"),
         )
         result = await _resolve_default_node()
@@ -284,7 +284,7 @@ class TestResolveDefaultNode:
     async def test_falls_back_when_default_node_not_set(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
         mock_proxmox_client.get_nodes.return_value = ["test-node-2", "test-node-4"]
         monkeypatch.setattr(
-            "tools.proxmox.get_proxmox_config",
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(host="203.0.113.50", default_node=None),
         )
         result = await _resolve_default_node()
@@ -294,7 +294,7 @@ class TestResolveDefaultNode:
     async def test_raises_when_cluster_has_no_nodes(self, monkeypatch: pytest.MonkeyPatch, mock_proxmox_client) -> None:
         mock_proxmox_client.get_nodes.return_value = []
         monkeypatch.setattr(
-            "tools.proxmox.get_proxmox_config",
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(host="203.0.113.50", default_node="test-node-2"),
         )
         with pytest.raises(ValueError, match="No Proxmox nodes found in cluster"):
@@ -520,7 +520,7 @@ class TestCreateLxc:
     ) -> None:
         mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
         monkeypatch.setattr(
-            "tools.proxmox.get_proxmox_config",
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
             lambda: ProxmoxConfig(
                 host="203.0.113.50",
                 default_storage="local",
@@ -722,7 +722,7 @@ class TestLxcNotConfigured:
 
     @pytest.fixture(autouse=True)
     def disable_proxmox(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("tools.proxmox.proxmox_configured", lambda: False)
+        monkeypatch.setattr("mcp_homelab.tools.proxmox.proxmox_configured", lambda: False)
 
     @pytest.mark.asyncio
     async def test_list_lxc_returns_error(self) -> None:

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.config import get_config_dir
+from mcp_homelab.core.config import get_config_dir
 
 logger = logging.getLogger(__name__)
 

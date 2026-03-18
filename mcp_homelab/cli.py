@@ -116,15 +116,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     """Start the MCP server."""
     _configure_logging(args)
 
-    from core.config import bootstrap_config_dir, load_env, validate_env
+    from mcp_homelab.core.config import bootstrap_config_dir
 
     bootstrap_config_dir(Path(__file__).resolve().parent.parent)
-    load_env()
-    validate_env()
 
-    from server import mcp
+    from mcp_homelab.server import start_server
 
-    mcp.run()
+    start_server()
 
 
 def _cmd_setup(args: argparse.Namespace) -> None:

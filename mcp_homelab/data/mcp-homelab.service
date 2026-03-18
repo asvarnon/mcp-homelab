@@ -8,14 +8,20 @@ User=mcp
 Group=mcp
 WorkingDirectory=/opt/mcp-homelab
 EnvironmentFile=/opt/mcp-homelab/.env
-ExecStart=/opt/mcp-homelab/.venv/bin/python server.py
+ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
+PrivateDevices=true
 ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
 ReadWritePaths=/opt/mcp-homelab
 
 [Install]
