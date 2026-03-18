@@ -13,8 +13,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
-from core.ssh import SSHError, SSHManager
+from mcp_homelab.core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
+from mcp_homelab.core.ssh import SSHError, SSHManager
 
 
 @pytest.fixture()
@@ -51,7 +51,7 @@ class TestGetConfig:
         mgr = SSHManager()
         assert mgr._config is None
 
-        with patch("core.ssh.load_config") as mock_load:
+        with patch("mcp_homelab.core.ssh.load_config") as mock_load:
             mock_load.return_value = MagicMock()
             result = mgr._get_config()
             mock_load.assert_called_once()
@@ -61,7 +61,7 @@ class TestGetConfig:
         mgr = SSHManager()
         fake_config = MagicMock()
 
-        with patch("core.ssh.load_config") as mock_load:
+        with patch("mcp_homelab.core.ssh.load_config") as mock_load:
             mock_load.return_value = fake_config
             mgr._get_config()
             mgr._get_config()
@@ -70,7 +70,7 @@ class TestGetConfig:
 
 
 class TestConnect:
-    @patch("core.ssh.paramiko.SSHClient")
+    @patch("mcp_homelab.core.ssh.paramiko.SSHClient")
     def test_creates_connection(self, mock_ssh_cls: MagicMock, ssh_manager: SSHManager) -> None:
         mock_client = MagicMock()
         mock_ssh_cls.return_value = mock_client
@@ -84,7 +84,7 @@ class TestConnect:
         )
         assert result is mock_client
 
-    @patch("core.ssh.paramiko.SSHClient")
+    @patch("mcp_homelab.core.ssh.paramiko.SSHClient")
     def test_caches_connection(self, mock_ssh_cls: MagicMock, ssh_manager: SSHManager) -> None:
         mock_client = MagicMock()
         mock_transport = MagicMock()
@@ -99,7 +99,7 @@ class TestConnect:
         assert first is second
         assert mock_ssh_cls.call_count == 1
 
-    @patch("core.ssh.paramiko.SSHClient")
+    @patch("mcp_homelab.core.ssh.paramiko.SSHClient")
     def test_evicts_stale_connection(self, mock_ssh_cls: MagicMock, ssh_manager: SSHManager) -> None:
         stale_client = MagicMock()
         stale_transport = MagicMock()

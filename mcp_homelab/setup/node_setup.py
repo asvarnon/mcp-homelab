@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from core.config import get_config_dir
+from mcp_homelab.core.config import get_config_dir
 
 from mcp_homelab.setup.prompts import (
     prompt_ip,

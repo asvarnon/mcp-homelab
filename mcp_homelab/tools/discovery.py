@@ -15,9 +15,9 @@ import logging
 from collections.abc import Awaitable, Coroutine, Sequence
 from typing import Any
 
-from tools import nodes, proxmox, opnsense
-from tools.nodes import NodeSummary
-from core.config import proxmox_configured, opnsense_configured
+from mcp_homelab.tools import nodes, proxmox, opnsense
+from mcp_homelab.tools.nodes import NodeSummary
+from mcp_homelab.core.config import proxmox_configured, opnsense_configured
 
 logger = logging.getLogger(__name__)
 

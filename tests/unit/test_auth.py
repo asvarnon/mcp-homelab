@@ -21,9 +21,9 @@ from pydantic import ValidationError
 from ruamel.yaml import YAML
 from starlette.applications import Starlette
 
-from core.auth import StaticBearerVerifier
-from core.config import ServerConfig, validate_env
-from core.oauth_provider import HomelabOAuthProvider
+from mcp_homelab.core.auth import StaticBearerVerifier
+from mcp_homelab.core.config import ServerConfig, validate_env
+from mcp_homelab.core.oauth_provider import HomelabOAuthProvider
 
 
 class TestStaticBearerVerifier:

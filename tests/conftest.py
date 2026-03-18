@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
+from mcp_homelab.core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
 
 
 # ---------------------------------------------------------------------------

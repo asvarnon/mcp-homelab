@@ -116,15 +116,13 @@ def _cmd_serve(args: argparse.Namespace) -> None:
     """Start the MCP server."""
     _configure_logging(args)
 
-    from core.config import bootstrap_config_dir, load_env, validate_env
+    from mcp_homelab.core.config import bootstrap_config_dir
 
     bootstrap_config_dir(Path(__file__).resolve().parent.parent)
-    load_env()
-    validate_env()
 
-    from server import mcp
+    from mcp_homelab.server import start_server
 
-    mcp.run()
+    start_server()
 
 
 def _cmd_setup(args: argparse.Namespace) -> None:
@@ -139,7 +137,7 @@ def _cmd_setup(args: argparse.Namespace) -> None:
         run_check()
     elif sub == "client":
         from mcp_homelab.setup.client_setup import run_client_setup
-        run_client_setup(dry_run=args.dry_run)
+        run_client_setup(dry_run=args.dry_run, url=args.url)
     elif sub == "proxmox":
         from mcp_homelab.setup.proxmox_setup import run_proxmox_setup
         run_proxmox_setup()
@@ -195,6 +193,9 @@ def main() -> None:
     serve_parser.add_argument("--verbose", "-v", action="store_true", help="Enable info-level logging to stderr")
     serve_parser.add_argument("--debug", action="store_true", help="Enable debug-level logging (includes paramiko/httpx)")
 
+    install_parser = subparsers.add_parser("install", help="Install as a systemd service (requires root)")
+    install_parser.add_argument("--public-url", default=None, help="Public HTTPS URL for OAuth (prompted if omitted)")
+
     # setup subcommand with its own sub-subcommands
     setup_parser = subparsers.add_parser("setup", help="Guided setup wizard for configuring nodes and integrations")
     setup_sub = setup_parser.add_subparsers(dest="setup_command")
@@ -206,6 +207,7 @@ def main() -> None:
 
     client_parser = setup_sub.add_parser("client", help="Configure an MCP client (Claude Desktop, VS Code)")
     client_parser.add_argument("--dry-run", action="store_true", help="Print config snippet without writing")
+    client_parser.add_argument("--url", default=None, help="Remote server URL for HTTP transport (default: stdio/local)")
 
     setup_sub.add_parser("proxmox", help="Configure Proxmox VE API connection")
     setup_sub.add_parser("opnsense", help="Configure OPNsense API connection")
@@ -227,6 +229,9 @@ def main() -> None:
             _cmd_init(args)
         elif args.command == "serve":
             _cmd_serve(args)
+        elif args.command == "install":
+            from mcp_homelab.setup.install import run_install
+            run_install(public_url=args.public_url)
         elif args.command == "setup":
             _cmd_setup(args)
         else:

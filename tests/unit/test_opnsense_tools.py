@@ -8,7 +8,13 @@ from __future__ import annotations
 
 import pytest
 
-from tools.opnsense import get_dhcp_leases, get_firewall_aliases, get_interface_status
+from mcp_homelab.core.config import AppConfig, HostConfig
+from mcp_homelab.tools.opnsense import (
+    check_ip_available,
+    get_dhcp_leases,
+    get_firewall_aliases,
+    get_interface_status,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -18,9 +24,9 @@ def mock_opnsense_client(monkeypatch: pytest.MonkeyPatch):
 
     mock_client = MagicMock()
     mock_client.get = AsyncMock()
-    monkeypatch.setattr("tools.opnsense._client", mock_client)
+    monkeypatch.setattr("mcp_homelab.tools.opnsense._client", mock_client)
     # Default: OPNsense is configured (happy path)
-    monkeypatch.setattr("tools.opnsense.opnsense_configured", lambda: True)
+    monkeypatch.setattr("mcp_homelab.tools.opnsense.opnsense_configured", lambda: True)
     return mock_client
 
 
@@ -161,6 +167,163 @@ class TestGetFirewallAliases:
 
 
 # ===========================================================================
+# check_ip_available
+# ===========================================================================
+
+
+class TestCheckIpAvailable:
+    @pytest.mark.asyncio
+    async def test_available_ip(self, mock_opnsense_client, monkeypatch) -> None:
+        """IP with no DHCP lease and no config entry is available."""
+        mock_opnsense_client.get.return_value = {"rows": []}
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
+        result = await check_ip_available("10.10.10.200")
+        assert result["available"] is True
+        assert result["conflicts"] == []
+        assert result["ip"] == "10.10.10.200"
+        assert "dhcp_leases" in result["sources_checked"]
+        assert "config_hosts" in result["sources_checked"]
+        assert result["warnings"] == []
+
+    @pytest.mark.asyncio
+    async def test_conflict_dhcp_lease(self, mock_opnsense_client, monkeypatch) -> None:
+        """IP with an active DHCP lease is not available."""
+        mock_opnsense_client.get.return_value = {
+            "rows": [
+                {
+                    "address": "10.10.10.101",
+                    "mac": "aa:bb:cc:dd:ee:ff",
+                    "hostname": "uptime-kuma",
+                    "status": "online",
+                },
+            ]
+        }
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
+        result = await check_ip_available("10.10.10.101")
+        assert result["available"] is False
+        assert len(result["conflicts"]) == 1
+        assert result["conflicts"][0]["source"] == "dhcp_lease"
+        assert "uptime-kuma" in result["conflicts"][0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_conflict_config_host(self, mock_opnsense_client, monkeypatch) -> None:
+        """IP assigned to a config.yaml host is not available."""
+        mock_opnsense_client.get.return_value = {"rows": []}
+        config = AppConfig(
+            hosts={"gamehost": HostConfig(hostname="gamehost", ip="10.50.50.10", description="Game server")},
+            proxmox=None,
+            opnsense=None,
+        )
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
+        result = await check_ip_available("10.50.50.10")
+        assert result["available"] is False
+        assert len(result["conflicts"]) == 1
+        assert result["conflicts"][0]["source"] == "config_host"
+        assert "gamehost" in result["conflicts"][0]["detail"]
+
+    @pytest.mark.asyncio
+    async def test_both_dhcp_and_config_conflict(self, mock_opnsense_client, monkeypatch) -> None:
+        """IP that conflicts in both DHCP and config returns two conflicts."""
+        mock_opnsense_client.get.return_value = {
+            "rows": [{"address": "10.10.10.101", "mac": "aa:bb:cc:dd:ee:ff", "hostname": "box", "status": "online"}]
+        }
+        config = AppConfig(
+            hosts={"monitor": HostConfig(hostname="monitor", ip="10.10.10.101", description="Monitoring VM")},
+            proxmox=None,
+            opnsense=None,
+        )
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
+        result = await check_ip_available("10.10.10.101")
+        assert result["available"] is False
+        assert len(result["conflicts"]) == 2
+        sources = {c["source"] for c in result["conflicts"]}
+        assert sources == {"dhcp_lease", "config_host"}
+
+    @pytest.mark.asyncio
+    async def test_no_match_different_ip(self, mock_opnsense_client, monkeypatch) -> None:
+        """Existing leases for other IPs don't cause false positives."""
+        mock_opnsense_client.get.return_value = {
+            "rows": [{"address": "10.10.10.50", "hostname": "pve", "mac": "aa:bb:cc:00:00:01", "status": "online"}]
+        }
+        config = AppConfig(
+            hosts={"pve": HostConfig(hostname="pve", ip="10.10.10.50", description="Proxmox")},
+            proxmox=None,
+            opnsense=None,
+        )
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: config)
+        result = await check_ip_available("10.10.10.200")
+        assert result["available"] is True
+        assert result["conflicts"] == []
+
+    @pytest.mark.asyncio
+    async def test_config_load_failure_warns(self, mock_opnsense_client, monkeypatch) -> None:
+        """If config.yaml can't be loaded, DHCP check still runs and warning is surfaced."""
+        mock_opnsense_client.get.return_value = {
+            "rows": [{"address": "10.10.10.5", "hostname": "router", "mac": "ff:ff:ff:00:00:01", "status": "online"}]
+        }
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", _raise_config_error)
+        result = await check_ip_available("10.10.10.5")
+        assert result["available"] is False
+        assert len(result["conflicts"]) == 1
+        assert result["conflicts"][0]["source"] == "dhcp_lease"
+        assert "config_hosts" not in result["sources_checked"]
+        assert len(result["warnings"]) == 1
+        assert "config.yaml" in result["warnings"][0]
+
+    @pytest.mark.asyncio
+    async def test_config_load_failure_no_dhcp_conflict(self, mock_opnsense_client, monkeypatch) -> None:
+        """Config failure with clean DHCP returns available=True but with warning."""
+        mock_opnsense_client.get.return_value = {"rows": []}
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", _raise_config_error)
+        result = await check_ip_available("10.10.10.200")
+        assert result["available"] is True
+        assert len(result["warnings"]) == 1
+        assert "dhcp_leases" in result["sources_checked"]
+        assert "config_hosts" not in result["sources_checked"]
+
+    @pytest.mark.asyncio
+    async def test_invalid_ip_raises(self, mock_opnsense_client) -> None:
+        """Non-IP strings raise ValueError."""
+        with pytest.raises(ValueError, match="Invalid IP"):
+            await check_ip_available("not-an-ip")
+
+    @pytest.mark.asyncio
+    async def test_cidr_raises(self, mock_opnsense_client) -> None:
+        """CIDR notation is rejected — must be a single host address."""
+        with pytest.raises(ValueError, match="Invalid IP"):
+            await check_ip_available("10.10.10.0/24")
+
+    @pytest.mark.asyncio
+    async def test_empty_string_raises(self, mock_opnsense_client) -> None:
+        """Empty string raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid IP"):
+            await check_ip_available("")
+
+    @pytest.mark.asyncio
+    async def test_rejects_zero_padded_ip(self, mock_opnsense_client) -> None:
+        """Zero-padded octets are ambiguous and rejected."""
+        with pytest.raises(ValueError, match="Invalid IP"):
+            await check_ip_available("010.010.010.001")
+
+    @pytest.mark.asyncio
+    async def test_normalizes_whitespace(self, mock_opnsense_client, monkeypatch) -> None:
+        """Leading/trailing whitespace is stripped before validation."""
+        mock_opnsense_client.get.return_value = {"rows": []}
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.load_config", lambda: _empty_config())
+        result = await check_ip_available("  10.10.10.200  ")
+        assert result["available"] is True
+        assert result["ip"] == "10.10.10.200"
+
+
+def _empty_config() -> AppConfig:
+    return AppConfig(hosts={}, proxmox=None, opnsense=None)
+
+
+def _raise_config_error() -> None:
+    raise FileNotFoundError("config.yaml not found")
+
+
+# ===========================================================================
 # Not-configured guards
 # ===========================================================================
 
@@ -170,7 +333,7 @@ class TestOPNsenseNotConfigured:
 
     @pytest.fixture(autouse=True)
     def disable_opnsense(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr("tools.opnsense.opnsense_configured", lambda: False)
+        monkeypatch.setattr("mcp_homelab.tools.opnsense.opnsense_configured", lambda: False)
 
     @pytest.mark.asyncio
     async def test_get_dhcp_leases_returns_error(self) -> None:
@@ -190,3 +353,9 @@ class TestOPNsenseNotConfigured:
         result = await get_firewall_aliases()
         assert len(result) == 1
         assert "error" in result[0]
+
+    @pytest.mark.asyncio
+    async def test_check_ip_available_returns_error(self) -> None:
+        result = await check_ip_available("10.10.10.1")
+        assert "error" in result
+        assert "not configured" in result["error"].lower()

@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from tools.context_gen import generate_context, list_context_files, _migrate_legacy_layout
+from mcp_homelab.tools.context_gen import generate_context, list_context_files, _migrate_legacy_layout
 
 
 # ---------------------------------------------------------------------------

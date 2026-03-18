@@ -125,12 +125,16 @@ Then configure using the standard CLI commands — same as local setup:
 
 ## Step 4: Install as a Service
 
-> **When `mcp-homelab install` is implemented**, this step will be a single command:
-> ```bash
-> sudo .venv/bin/mcp-homelab install --public-url "https://mcp.example.com"
-> ```
+```bash
+sudo .venv/bin/mcp-homelab install --public-url "https://mcp.example.com"
+```
 
-**Until then, manual steps:**
+This creates the `mcp` service user, sets ownership, updates config.yaml for HTTP transport, installs the systemd unit, and starts the service.
+
+If you prefer to do each step manually (or need to customize), the manual steps are below.
+
+<details>
+<summary>Manual steps (expand if needed)</summary>
 
 ### Create service user
 
@@ -184,6 +188,8 @@ journalctl -u mcp-homelab -n 20
 chmod 400 /opt/mcp-homelab/.env
 chown mcp:mcp /opt/mcp-homelab/.env
 ```
+
+</details>
 
 ## Step 5: Set Up Cloudflare Tunnel
 

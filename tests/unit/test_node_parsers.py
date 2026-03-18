@@ -13,7 +13,7 @@ import pytest
 
 # Import the private parser functions directly for unit testing.
 # In Java terms: testing package-private helpers via same-package test class.
-from tools.nodes import (
+from mcp_homelab.tools.nodes import (
     _extract_label,
     _parse_bsd_cpu_info,
     _parse_bsd_cpu_percent,
@@ -623,7 +623,7 @@ class TestGetNodeStatusFreebsd:
     @pytest.fixture(autouse=True)
     def _stub_ssh(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Stub _get_host_os and _compound_ssh_query for FreeBSD path."""
-        from tools import nodes
+        from mcp_homelab.tools import nodes
 
         monkeypatch.setattr(nodes, "_get_host_os", lambda _: "freebsd")
 
@@ -646,7 +646,7 @@ class TestGetNodeStatusFreebsd:
         monkeypatch.setattr(nodes, "_compound_ssh_query", fake_query)
 
     async def test_returns_bsd_status(self) -> None:
-        from tools.nodes import get_node_status
+        from mcp_homelab.tools.nodes import get_node_status
 
         result = await get_node_status("opnsense")
         assert result["uptime"] == "up 2 days, 1:30"
@@ -661,7 +661,7 @@ class TestGetHardwareSpecsFreebsd:
 
     @pytest.fixture(autouse=True)
     def _stub_ssh(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from tools import nodes
+        from mcp_homelab.tools import nodes
 
         monkeypatch.setattr(nodes, "_get_host_os", lambda _: "freebsd")
 
@@ -677,7 +677,7 @@ class TestGetHardwareSpecsFreebsd:
         monkeypatch.setattr(nodes, "_compound_ssh_query", fake_query)
 
     async def test_returns_bsd_specs(self) -> None:
-        from tools.nodes import get_hardware_specs
+        from mcp_homelab.tools.nodes import get_hardware_specs
 
         result = await get_hardware_specs("opnsense")
         assert result["cpu_model"] == "Intel(R) Celeron(R) J4125 CPU @ 2.00GHz"
