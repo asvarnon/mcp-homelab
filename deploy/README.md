@@ -1,12 +1,13 @@
 # Deployment
 
-Automated deployment of mcp-homelab to an LXC container with Cloudflare Tunnel for HTTPS.
+Automated deployment of mcp-homelab to a **Debian/Ubuntu** LXC container with Cloudflare Tunnel for HTTPS. The target must use `apt` and `systemd`.
 
 ## Prerequisites
 
 | Requirement                 | Detail                                                                                                                    |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
 | **Root SSH access**         | Root SSH to the target LXC (key-based, or bootstrapped via `--pve-host` which also installs the deploy key automatically) |
+| **Debian/Ubuntu target**    | The deploy script uses `apt-get` and `systemd` — other distros are not supported                                          |
 | **Cloudflare Tunnel token** | Create a tunnel in Cloudflare Zero Trust dashboard → Tunnels → Create → get the connector token                           |
 | **Public URL**              | The HTTPS hostname you configure in the tunnel's public hostname tab (e.g. `https://mcp.example.com`)                     |
 
@@ -47,7 +48,7 @@ python deploy/deploy.py \
 | `--port`            | No       | `8000`                        | Server listen port                            |
 | `--repo-url`        | No       | GitHub repo                   | Git repository URL                            |
 | `--pve-host`        | No       | —                             | Proxmox VE host for LXC SSH bootstrap         |
-| `--pve-user`        | No       | —                             | SSH user on PVE (required with `--pve-host`)  |
+| `--pve-user`        | No       | —                             | SSH user on PVE — must be `root` or have passwordless sudo for `pct` |
 | `--pve-key`         | No       | —                             | SSH key for PVE (required with `--pve-host`)  |
 | `--vmid`            | No       | `100`                         | LXC container VMID                            |
 

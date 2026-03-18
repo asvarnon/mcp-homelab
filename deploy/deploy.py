@@ -177,12 +177,20 @@ def main() -> int:
         print("ERROR: set --cf-tunnel-token or CF_TUNNEL_TOKEN", file=sys.stderr)
         return 2
 
+    if "\n" in cf_tunnel_token or "\r" in cf_tunnel_token:
+        print("ERROR: --cf-tunnel-token must not contain newline characters", file=sys.stderr)
+        return 2
+
     if not public_url:
         print("ERROR: --public-url must not be empty", file=sys.stderr)
         return 2
 
     if not public_url.startswith("https://"):
         print("ERROR: --public-url must start with https://", file=sys.stderr)
+        return 2
+
+    if '"' in public_url or "\n" in public_url or "\r" in public_url:
+        print("ERROR: --public-url contains invalid characters", file=sys.stderr)
         return 2
 
     if bootstrap_enabled:
@@ -224,11 +232,12 @@ def main() -> int:
         )
 
         pub_key_content: str = ssh_key.with_suffix(".pub").read_text(encoding="utf-8").strip()
+        quoted_key: str = shlex.quote(pub_key_content)
         key_install_command: str = (
             f"sudo pct exec {vmid_quoted} -- bash -c "
             + shlex.quote(
                 f"mkdir -p /root/.ssh && chmod 700 /root/.ssh && "
-                f"echo {shlex.quote(pub_key_content)} >> /root/.ssh/authorized_keys && "
+                f"grep -qF {quoted_key} /root/.ssh/authorized_keys 2>/dev/null || echo {quoted_key} >> /root/.ssh/authorized_keys && "
                 f"chmod 600 /root/.ssh/authorized_keys"
             )
         )
@@ -436,7 +445,7 @@ def main() -> int:
             print(cf_result.stderr.strip(), file=sys.stderr)
         elif cf_result.stdout:
             print(cf_result.stdout.strip(), file=sys.stderr)
-        sys.exit(cf_result.returncode)
+        return cf_result.returncode
     _run_ssh_command(
         host,
         ssh_key,
