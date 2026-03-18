@@ -1,14 +1,16 @@
 """OPNsense REST API tools.
 
-Tools for querying firewall state — DHCP leases, interfaces, aliases.
+Tools for querying firewall state — DHCP leases, interfaces, aliases,
+and IP availability checks.
 All functions use OPNsenseClient for transport — no direct httpx usage here.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import ipaddress
+from typing import Any, TypedDict
 
-from core.config import opnsense_configured
+from core.config import load_config, opnsense_configured
 from core.opnsense_api import OPNsenseAPIError, OPNsenseClient
 
 _client = OPNsenseClient()
@@ -113,3 +115,108 @@ async def get_firewall_aliases() -> list[dict[str, Any]]:
         }
         for row in rows
     ]
+
+
+class IpConflict(TypedDict):
+    source: str
+    detail: str
+
+
+class IpAvailabilityResult(TypedDict):
+    ip: str
+    available: bool
+    conflicts: list[IpConflict]
+    sources_checked: list[str]
+    warnings: list[str]
+
+
+def _normalize_ip(raw: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address:
+    """Parse and normalize an IP address string.
+
+    Raises:
+        ValueError: If the input is not a valid unicast IP address.
+    """
+    try:
+        addr = ipaddress.ip_address(raw.strip())
+    except ValueError:
+        raise ValueError(f"Invalid IP address: {raw!r}")
+    return addr
+
+
+async def check_ip_available(ip: str) -> IpAvailabilityResult | dict:
+    """Check whether an IP address is available for assignment.
+
+    Requires OPNsense to be configured — DHCP lease data comes from the
+    OPNsense API. This tool does NOT support other DHCP servers.
+
+    Cross-references the given IP against:
+    1. Active DHCP leases from OPNsense (requires OPNsense configuration)
+    2. Static host entries in config.yaml
+
+    Use this before ``create_lxc`` or any manual IP assignment to avoid
+    conflicts.
+
+    Args:
+        ip: IPv4 or IPv6 address to check (e.g. "10.10.10.120").
+            Must be a single host address, not CIDR notation.
+
+    Returns:
+        IpAvailabilityResult with ``available`` flag, list of conflicts,
+        which data sources were checked, and any warnings about partial
+        results.
+
+    Raises:
+        ValueError: If ``ip`` is not a valid IP address.
+    """
+    if not opnsense_configured():
+        return _NOT_CONFIGURED
+
+    normalized = _normalize_ip(ip)
+    normalized_str = str(normalized)
+
+    conflicts: list[IpConflict] = []
+    sources_checked: list[str] = []
+    warnings: list[str] = []
+
+    # Check DHCP leases
+    data = await _client.get("/dhcpv4/leases/searchLease")
+    rows: list[dict[str, Any]] = data.get("rows", [])
+    sources_checked.append("dhcp_leases")
+    for row in rows:
+        try:
+            lease_ip = _normalize_ip(row.get("address", ""))
+        except ValueError:
+            continue
+        if lease_ip == normalized:
+            hostname = row.get("hostname", "unknown")
+            mac = row.get("mac", "unknown")
+            status = row.get("status", "unknown")
+            conflicts.append(IpConflict(
+                source="dhcp_lease",
+                detail=f"Leased to {hostname} (MAC {mac}, status {status})",
+            ))
+
+    # Check config.yaml hosts
+    try:
+        config = load_config()
+        sources_checked.append("config_hosts")
+        for name, host in config.hosts.items():
+            try:
+                host_ip = _normalize_ip(host.ip)
+            except ValueError:
+                continue
+            if host_ip == normalized:
+                conflicts.append(IpConflict(
+                    source="config_host",
+                    detail=f"Assigned to host '{name}' ({host.description})",
+                ))
+    except (FileNotFoundError, EnvironmentError, ValueError) as exc:
+        warnings.append(f"config.yaml check skipped: {exc}")
+
+    return IpAvailabilityResult(
+        ip=normalized_str,
+        available=len(conflicts) == 0,
+        conflicts=conflicts,
+        sources_checked=sources_checked,
+        warnings=warnings,
+    )

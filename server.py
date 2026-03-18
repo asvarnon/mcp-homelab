@@ -195,6 +195,15 @@ async def get_firewall_aliases() -> list[dict]:
     return await opnsense.get_firewall_aliases()
 
 
+@mcp.tool()
+async def check_ip_available(ip: str) -> opnsense.IpAvailabilityResult | dict:
+    """Check if an IP is available by cross-referencing OPNsense DHCP leases and config.yaml hosts.
+
+    Requires OPNsense to be configured. Returns which data sources were checked
+    and any warnings if a source was unavailable."""
+    return await opnsense.check_ip_available(ip)
+
+
 # ---------------------------------------------------------------------------
 # Discovery tools
 # ---------------------------------------------------------------------------
