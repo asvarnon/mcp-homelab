@@ -278,7 +278,7 @@ def main() -> int:
         ssh_key,
         ssh_user,
         "curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | "
-        "gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg && "
+        "gpg --batch --yes --dearmor -o /usr/share/keyrings/cloudflare-main.gpg && "
         "echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] "
         "https://pkg.cloudflare.com/cloudflared any main' > "
         "/etc/apt/sources.list.d/cloudflared.list && "
@@ -332,7 +332,7 @@ def main() -> int:
     config_content: str = (
         "server:\n"
         "  transport: http\n"
-        f"  host: \"{host}\"\n"
+        "  host: \"0.0.0.0\"\n"
         f"  port: {port}\n"
         f"  public_url: \"{public_url}\"\n"
         "\n"
@@ -439,19 +439,32 @@ def main() -> int:
         encoding="utf-8",
         errors="replace",
     )
+    # `cloudflared service install` creates the systemd unit AND starts it.
+    # In LXC containers the default QUIC transport fails (kernel UDP buffer
+    # limits are too low), so the initial start may time out — that's expected.
+    # Log the result so token/auth errors aren't silently swallowed on re-runs.
     if cf_result.returncode != 0:
-        print("ERROR: install cloudflared tunnel service", file=sys.stderr)
-        if cf_result.stderr:
-            print(cf_result.stderr.strip(), file=sys.stderr)
-        elif cf_result.stdout:
-            print(cf_result.stdout.strip(), file=sys.stderr)
-        return cf_result.returncode
+        stderr_msg: str = (cf_result.stderr or cf_result.stdout or "").strip()
+        print(f"WARN: cloudflared service install exited {cf_result.returncode}: {stderr_msg}")
+    # Verify the unit file was written, then patch it to force HTTP/2.
     _run_ssh_command(
         host,
         ssh_key,
         ssh_user,
+        "test -f /etc/systemd/system/cloudflared.service",
+        "verify cloudflared service file was created",
+    )
+    # Force HTTP/2 — QUIC fails in LXC due to restricted UDP buffer sizes
+    # (see https://github.com/quic-go/quic-go/wiki/UDP-Buffer-Sizes).
+    _run_ssh_command(
+        host,
+        ssh_key,
+        ssh_user,
+        "sed -i 's|--no-autoupdate tunnel run|--no-autoupdate --protocol http2 tunnel run|' "
+        "/etc/systemd/system/cloudflared.service && "
+        "systemctl daemon-reload && "
         "systemctl enable --now cloudflared",
-        "enable and start cloudflared service",
+        "patch cloudflared to use HTTP/2 and restart",
     )
     current_step += 1
 
