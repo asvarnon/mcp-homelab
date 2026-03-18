@@ -189,6 +189,10 @@ This writes the correct stdio transport entry including the `MCP_HOMELAB_CONFIG_
 The `MCP_HOMELAB_CONFIG_DIR` env var is required — without it, MCP clients that spawn from a different working directory won't find your config files.
 </details>
 
+### Hosted mode (multi-client)
+
+Want to run mcp-homelab as a shared service accessible from multiple machines, Claude.ai, or mobile? See the [Hosted Mode Guide](guides/hosted-mode.md) for the full workflow, including the platform-specific [Proxmox LXC + Cloudflare Tunnel](guides/proxmox-cloudflare-tunnel.md) reference architecture.
+
 ### Running directly
 
 ```bash
