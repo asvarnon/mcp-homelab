@@ -97,30 +97,6 @@ class TestValidateEnvHttpTransport:
                 handle,
             )
 
-    def test_validate_env_requires_bearer_token_for_http(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        self._write_http_only_config(tmp_path)
-        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.delenv("MCP_BEARER_TOKEN", raising=False)
-
-        with pytest.raises(EnvironmentError, match="MCP_BEARER_TOKEN"):
-            validate_env()
-
-    def test_validate_env_requires_min_token_length(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        self._write_http_only_config(tmp_path)
-        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "short-token")
-
-        with pytest.raises(EnvironmentError, match="at least 32 characters"):
-            validate_env()
-
     def test_validate_env_accepts_valid_http_config(
         self,
         tmp_path: Path,
@@ -128,7 +104,6 @@ class TestValidateEnvHttpTransport:
     ) -> None:
         self._write_http_only_config(tmp_path)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -142,7 +117,6 @@ class TestPublicUrlValidation:
         """validate_env() raises when host=0.0.0.0 and no public_url is set."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="0.0.0.0")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         with pytest.raises(EnvironmentError, match="server.public_url"):
             validate_env()
@@ -159,7 +133,6 @@ class TestPublicUrlValidation:
             public_url="http://203.0.113.111:8000",
         )
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -171,7 +144,6 @@ class TestPublicUrlValidation:
         """validate_env() succeeds when host is a specific IP and no public_url."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="203.0.113.111")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -183,7 +155,6 @@ class TestPublicUrlValidation:
         """validate_env() raises when host='::' and no public_url is set."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="::")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         with pytest.raises(EnvironmentError, match="server.public_url"):
             validate_env()

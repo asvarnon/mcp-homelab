@@ -145,12 +145,6 @@ def validate_env() -> None:
                 missing.append(var)
 
     if config.server.transport == "http":
-        bearer_token = os.environ.get("MCP_BEARER_TOKEN", "")
-        if not bearer_token:
-            missing.append("MCP_BEARER_TOKEN")
-        elif len(bearer_token) < 32:
-            missing.append("MCP_BEARER_TOKEN (must be at least 32 characters)")
-
         if config.server.host in _WILDCARD_HOSTS and config.server.public_url is None:
             raise EnvironmentError(
                 "server.host is '0.0.0.0' (all interfaces) but server.public_url is not set. "

@@ -228,20 +228,27 @@ if __name__ == "__main__":
     if config.server.transport == "http":
         from pydantic import AnyHttpUrl
 
-        from mcp.server.auth.settings import AuthSettings
-
-        from core.auth import StaticBearerVerifier
-
+        from mcp.server.auth.provider import ProviderTokenVerifier
+        from mcp.server.auth.settings import (
+            AuthSettings,
+            ClientRegistrationOptions,
+            RevocationOptions,
+        )
         from mcp.server.transport_security import TransportSecuritySettings
 
-        token = os.environ["MCP_BEARER_TOKEN"]
+        from core.oauth_provider import HomelabOAuthProvider
+
         mcp.settings.host = config.server.host
         mcp.settings.port = config.server.port
-        # Derive the public URL used for Host header validation metadata.
+
+        # Derive the public URL used for OAuth metadata and Host header
+        # validation.  HTTPS public_url is expected once a TLS terminator
+        # (Cloudflare Tunnel / Caddy) is in front of this server.
         public_url = (
             str(config.server.public_url) if config.server.public_url
             else f"http://{config.server.host}:{config.server.port}"
         )
+
         # Override DNS rebinding protection to allow the configured host.
         # FastMCP's constructor auto-enables it for localhost only, but we
         # re-bind to a non-localhost address so we must update allowed_hosts.
@@ -251,14 +258,23 @@ if __name__ == "__main__":
             allowed_hosts=[host_with_port],
             allowed_origins=[f"http://{host_with_port}"],
         )
+
         mcp.settings.auth = AuthSettings(
             issuer_url=AnyHttpUrl(public_url),
             resource_server_url=AnyHttpUrl(public_url),
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
         )
-        # NOTE: _token_verifier is a private FastMCP attribute. The integration
-        # test in test_auth.py verifies auth is enforced end-to-end, so any
-        # breakage from SDK updates will be caught immediately.
-        mcp._token_verifier = StaticBearerVerifier(token)
+
+        # NOTE: _auth_server_provider and _token_verifier are private
+        # FastMCP attributes.  Setting them post-construction is safe
+        # because the SDK reads them at run() time when building Starlette
+        # routes — not at construction.  Integration tests verify auth is
+        # enforced end-to-end, so SDK renames will be caught immediately.
+        provider = HomelabOAuthProvider()
+        mcp._auth_server_provider = provider
+        mcp._token_verifier = ProviderTokenVerifier(provider)
+
         mcp.run(transport="streamable-http")
     else:
         mcp.run()
