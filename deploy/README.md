@@ -4,12 +4,12 @@ Automated deployment of mcp-homelab to an LXC container with Cloudflare Tunnel f
 
 ## Prerequisites
 
-| Requirement | Detail |
-|------------|--------|
-| **SSH access** | Root SSH to the target LXC (key-based, or bootstrapped via `--pve-host`) |
-| **Passwordless sudo** | The SSH user must have passwordless `sudo` for `apt-get install`, `systemctl`, and `cloudflared service install` |
-| **Cloudflare Tunnel token** | Create a tunnel in Cloudflare Zero Trust dashboard → Tunnels → Create → get the connector token |
-| **Public URL** | The HTTPS hostname you configure in the tunnel's public hostname tab (e.g. `https://mcp.example.com`) |
+| Requirement                 | Detail                                                                                                           |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| **SSH access**              | Root SSH to the target LXC (key-based, or bootstrapped via `--pve-host`)                                         |
+| **Passwordless sudo**       | The SSH user must have passwordless `sudo` for `apt-get install`, `systemctl`, and `cloudflared service install` |
+| **Cloudflare Tunnel token** | Create a tunnel in Cloudflare Zero Trust dashboard → Tunnels → Create → get the connector token                  |
+| **Public URL**              | The HTTPS hostname you configure in the tunnel's public hostname tab (e.g. `https://mcp.example.com`)            |
 
 ## Usage
 
@@ -35,20 +35,20 @@ python deploy/deploy.py \
 
 ### All arguments
 
-| Argument | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `--host` | Yes | — | Target LXC IP address |
-| `--cf-tunnel-token` | Yes | — | Cloudflare Tunnel connector token |
-| `--public-url` | Yes | — | Public HTTPS URL (must start with `https://`) |
-| `--branch` | No | `develop` | Git branch to deploy |
-| `--ssh-key` | No | `~/.ssh/mcp-server-bootstrap` | SSH private key path |
-| `--ssh-user` | No | `root` | SSH user on target |
-| `--port` | No | `8000` | Server listen port |
-| `--repo-url` | No | GitHub repo | Git repository URL |
-| `--pve-host` | No | — | Proxmox VE host for LXC SSH bootstrap |
-| `--pve-user` | No | — | SSH user on PVE (required with `--pve-host`) |
-| `--pve-key` | No | — | SSH key for PVE (required with `--pve-host`) |
-| `--vmid` | No | `100` | LXC container VMID |
+| Argument            | Required | Default                       | Description                                   |
+| ------------------- | -------- | ----------------------------- | --------------------------------------------- |
+| `--host`            | Yes      | —                             | Target LXC IP address                         |
+| `--cf-tunnel-token` | Yes      | —                             | Cloudflare Tunnel connector token             |
+| `--public-url`      | Yes      | —                             | Public HTTPS URL (must start with `https://`) |
+| `--branch`          | No       | `develop`                     | Git branch to deploy                          |
+| `--ssh-key`         | No       | `~/.ssh/mcp-server-bootstrap` | SSH private key path                          |
+| `--ssh-user`        | No       | `root`                        | SSH user on target                            |
+| `--port`            | No       | `8000`                        | Server listen port                            |
+| `--repo-url`        | No       | GitHub repo                   | Git repository URL                            |
+| `--pve-host`        | No       | —                             | Proxmox VE host for LXC SSH bootstrap         |
+| `--pve-user`        | No       | —                             | SSH user on PVE (required with `--pve-host`)  |
+| `--pve-key`         | No       | —                             | SSH key for PVE (required with `--pve-host`)  |
+| `--vmid`            | No       | `100`                         | LXC container VMID                            |
 
 ## What it deploys
 
