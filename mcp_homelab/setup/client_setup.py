@@ -223,9 +223,13 @@ _CLIENTS: list[ClientTarget] = [
 
 def run_client_setup(dry_run: bool = False, url: str | None = None) -> None:
     """Interactive MCP client configuration."""
+    # Normalize url: treat empty/whitespace-only as None (stdio mode)
+    if url is not None:
+        url = url.strip() or None
+
     print()
     print("─── MCP Client Setup ───")
-    if url:
+    if url is not None:
         print(f"Mode: HTTP (remote server at {url})")
     else:
         print("Mode: stdio (local server)")

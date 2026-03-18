@@ -56,11 +56,22 @@ def _validate_path_safe(path: Path) -> None:
     if not re.match(r'^[A-Za-z0-9/_.\\ :-]+$', path_str):
         print(f"  ✗ install path contains unsafe characters: {path_str}", file=sys.stderr)
         sys.exit(1)
+    # Spaces in paths break systemd unit fields like WorkingDirectory=
+    # without quoting.  Reject them rather than attempting systemd escaping.
+    if ' ' in path_str:
+        print("  ✗ install path contains spaces (unsupported by systemd units)", file=sys.stderr)
+        sys.exit(1)
 
 
 def _run_command(command: list[str], step_name: str) -> subprocess.CompletedProcess[str]:
     """Run a command and exit with a descriptive error if it fails."""
-    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    try:
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+    except OSError as exc:
+        print(f"  ✗ {step_name} failed", file=sys.stderr)
+        print(f"    command: {' '.join(command)}", file=sys.stderr)
+        print(f"    error: {exc}", file=sys.stderr)
+        sys.exit(1)
     if result.returncode != 0:
         stderr = result.stderr.strip() if result.stderr else "(no stderr output)"
         print(f"  ✗ {step_name} failed", file=sys.stderr)

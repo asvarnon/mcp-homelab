@@ -10,11 +10,42 @@ import pytest
 from ruamel.yaml import YAML
 
 from mcp_homelab.setup.install import (
+    _ensure_linux,
     _resolve_public_url,
+    _run_command,
     _update_server_config,
     _write_systemd_unit,
     run_install,
 )
+
+
+class TestEnsureLinux:
+    def test_exits_on_non_linux(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Windows")
+
+        with pytest.raises(SystemExit, match="1"):
+            _ensure_linux()
+
+        err = capsys.readouterr().err
+        assert "Linux only" in err
+
+    def test_passes_on_linux(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
+        _ensure_linux()  # should not raise
+
+
+class TestRunCommand:
+    def test_catches_missing_binary(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+        def raise_fnf(*args: object, **kwargs: object) -> None:
+            raise FileNotFoundError("[Errno 2] No such file or directory: 'nosuchcmd'")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", raise_fnf)
+
+        with pytest.raises(SystemExit, match="1"):
+            _run_command(["nosuchcmd"], "test step")
+
+        err = capsys.readouterr().err
+        assert "test step failed" in err
 
 
 class TestRunInstall:
