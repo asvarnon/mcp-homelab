@@ -155,6 +155,36 @@ class TestAuthorization:
 
         assert result is None
 
+    async def test_load_expired_code_returns_none(self) -> None:
+        provider = HomelabOAuthProvider()
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        code = _extract_code(redirect_url)
+
+        # Manually expire the code
+        provider._auth_codes[code].expires_at = time.time() - 1
+
+        result = await provider.load_authorization_code(client, code)
+        assert result is None
+
+    async def test_load_code_rejects_wrong_client(self) -> None:
+        provider = HomelabOAuthProvider()
+        client_a = _make_client("client-a")
+        client_b = _make_client("client-b")
+        await provider.register_client(client_a)
+        await provider.register_client(client_b)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client_a, params)
+        code = _extract_code(redirect_url)
+
+        # client_b should not be able to load client_a's code
+        result = await provider.load_authorization_code(client_b, code)
+        assert result is None
+
 
 # ── Token Exchange ────────────────────────────────────────────────────────
 
@@ -215,6 +245,49 @@ class TestTokenExchange:
 
         assert result is None
 
+    async def test_exchange_rejects_wrong_client(self) -> None:
+        provider = HomelabOAuthProvider()
+        client_a = _make_client("client-a")
+        client_b = _make_client("client-b")
+        await provider.register_client(client_a)
+        await provider.register_client(client_b)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client_a, params)
+        code = _extract_code(redirect_url)
+        auth_code = await provider.load_authorization_code(client_a, code)
+        assert auth_code is not None
+
+        with pytest.raises(ValueError, match="not issued to this client"):
+            await provider.exchange_authorization_code(client_b, auth_code)
+
+    async def test_exchange_rejects_expired_code(self) -> None:
+        provider = HomelabOAuthProvider()
+        client, code = await self._do_auth_code_flow(provider)
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        # Manually expire the code
+        auth_code.expires_at = time.time() - 1
+
+        with pytest.raises(ValueError, match="expired"):
+            await provider.exchange_authorization_code(client, auth_code)
+
+    async def test_expired_access_token_returns_none(self) -> None:
+        provider = HomelabOAuthProvider()
+        client, code = await self._do_auth_code_flow(provider)
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        token = await provider.exchange_authorization_code(client, auth_code)
+
+        # Manually expire the access token
+        entry = provider._access_tokens[token.access_token]
+        entry.expires_at = int(time.time()) - 1
+
+        result = await provider.load_access_token(token.access_token)
+        assert result is None
+
 
 # ── Refresh Token Rotation ────────────────────────────────────────────────
 
@@ -270,6 +343,25 @@ class TestRefreshTokenRotation:
 
         result = await provider.load_refresh_token(client, "bogus")
 
+        assert result is None
+
+    async def test_expired_refresh_token_returns_none(self) -> None:
+        provider = HomelabOAuthProvider()
+        client, access, refresh = await self._get_tokens(provider)
+
+        # Manually expire the refresh token
+        provider._refresh_tokens[refresh].expires_at = int(time.time()) - 1
+
+        result = await provider.load_refresh_token(client, refresh)
+        assert result is None
+
+    async def test_refresh_rejects_wrong_client(self) -> None:
+        provider = HomelabOAuthProvider()
+        client_a, access, refresh = await self._get_tokens(provider)
+        client_b = _make_client("other-client")
+        await provider.register_client(client_b)
+
+        result = await provider.load_refresh_token(client_b, refresh)
         assert result is None
 
 

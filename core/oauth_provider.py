@@ -133,13 +133,30 @@ class HomelabOAuthProvider:
         client: OAuthClientInformationFull,
         authorization_code: str,
     ) -> AuthorizationCode | None:
-        return self._auth_codes.get(authorization_code)
+        entry = self._auth_codes.get(authorization_code)
+        if entry is None:
+            return None
+        # Reject expired codes
+        if entry.expires_at < time.time():
+            del self._auth_codes[authorization_code]
+            return None
+        # Reject cross-client code redemption
+        if entry.client_id != (client.client_id or ""):
+            return None
+        return entry
 
     async def exchange_authorization_code(
         self,
         client: OAuthClientInformationFull,
         authorization_code: AuthorizationCode,
     ) -> OAuthToken:
+        # Validate client binding and expiry before consuming
+        if authorization_code.client_id != (client.client_id or ""):
+            raise ValueError("Authorization code was not issued to this client")
+        if authorization_code.expires_at < time.time():
+            self._auth_codes.pop(authorization_code.code, None)
+            raise ValueError("Authorization code has expired")
+
         # Consume the code (single-use)
         self._auth_codes.pop(authorization_code.code, None)
 
@@ -178,7 +195,17 @@ class HomelabOAuthProvider:
         client: OAuthClientInformationFull,
         refresh_token: str,
     ) -> RefreshToken | None:
-        return self._refresh_tokens.get(refresh_token)
+        entry = self._refresh_tokens.get(refresh_token)
+        if entry is None:
+            return None
+        # Reject expired refresh tokens
+        if entry.expires_at is not None and entry.expires_at < time.time():
+            self._refresh_tokens.pop(refresh_token, None)
+            return None
+        # Reject cross-client refresh
+        if entry.client_id != (client.client_id or ""):
+            return None
+        return entry
 
     async def exchange_refresh_token(
         self,
@@ -226,7 +253,14 @@ class HomelabOAuthProvider:
     # ── Access token validation ───────────────────────────────────────────
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        return self._access_tokens.get(token)
+        entry = self._access_tokens.get(token)
+        if entry is None:
+            return None
+        # Reject expired access tokens
+        if entry.expires_at is not None and entry.expires_at < time.time():
+            self._access_tokens.pop(token, None)
+            return None
+        return entry
 
     # ── Revocation ────────────────────────────────────────────────────────
 

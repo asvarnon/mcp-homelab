@@ -252,11 +252,23 @@ if __name__ == "__main__":
         # Override DNS rebinding protection to allow the configured host.
         # FastMCP's constructor auto-enables it for localhost only, but we
         # re-bind to a non-localhost address so we must update allowed_hosts.
+        # When public_url is set (TLS terminator in front), also allow that
+        # host so OAuth/CORS requests from clients using the public URL work.
         host_with_port = f"{config.server.host}:{config.server.port}"
+        allowed_hosts = [host_with_port]
+        allowed_origins = [f"http://{host_with_port}"]
+        if config.server.public_url:
+            from urllib.parse import urlparse
+            parsed = urlparse(str(config.server.public_url))
+            public_host = parsed.netloc  # includes port if present
+            if public_host and public_host != host_with_port:
+                allowed_hosts.append(public_host)
+                scheme = parsed.scheme or "https"
+                allowed_origins.append(f"{scheme}://{public_host}")
         mcp.settings.transport_security = TransportSecuritySettings(
             enable_dns_rebinding_protection=True,
-            allowed_hosts=[host_with_port],
-            allowed_origins=[f"http://{host_with_port}"],
+            allowed_hosts=allowed_hosts,
+            allowed_origins=allowed_origins,
         )
 
         mcp.settings.auth = AuthSettings(
