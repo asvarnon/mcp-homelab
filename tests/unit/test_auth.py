@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
-from mcp.server.auth.settings import AuthSettings
+from mcp.server.auth.provider import ProviderTokenVerifier
+from mcp.server.auth.settings import (
+    AuthSettings,
+    ClientRegistrationOptions,
+    RevocationOptions,
+)
 from mcp.server.fastmcp import FastMCP
 from pydantic import AnyHttpUrl
 from pydantic import ValidationError
@@ -15,6 +23,7 @@ from starlette.applications import Starlette
 
 from core.auth import StaticBearerVerifier
 from core.config import ServerConfig, validate_env
+from core.oauth_provider import HomelabOAuthProvider
 
 
 class TestStaticBearerVerifier:
@@ -97,30 +106,6 @@ class TestValidateEnvHttpTransport:
                 handle,
             )
 
-    def test_validate_env_requires_bearer_token_for_http(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        self._write_http_only_config(tmp_path)
-        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.delenv("MCP_BEARER_TOKEN", raising=False)
-
-        with pytest.raises(EnvironmentError, match="MCP_BEARER_TOKEN"):
-            validate_env()
-
-    def test_validate_env_requires_min_token_length(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-    ) -> None:
-        self._write_http_only_config(tmp_path)
-        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "short-token")
-
-        with pytest.raises(EnvironmentError, match="at least 32 characters"):
-            validate_env()
-
     def test_validate_env_accepts_valid_http_config(
         self,
         tmp_path: Path,
@@ -128,7 +113,6 @@ class TestValidateEnvHttpTransport:
     ) -> None:
         self._write_http_only_config(tmp_path)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -142,7 +126,6 @@ class TestPublicUrlValidation:
         """validate_env() raises when host=0.0.0.0 and no public_url is set."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="0.0.0.0")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         with pytest.raises(EnvironmentError, match="server.public_url"):
             validate_env()
@@ -159,7 +142,6 @@ class TestPublicUrlValidation:
             public_url="http://203.0.113.111:8000",
         )
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -171,7 +153,6 @@ class TestPublicUrlValidation:
         """validate_env() succeeds when host is a specific IP and no public_url."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="203.0.113.111")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         validate_env()
 
@@ -183,7 +164,6 @@ class TestPublicUrlValidation:
         """validate_env() raises when host='::' and no public_url is set."""
         TestValidateEnvHttpTransport._write_http_only_config(tmp_path, host="::")
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
-        monkeypatch.setenv("MCP_BEARER_TOKEN", "a" * 32)
 
         with pytest.raises(EnvironmentError, match="server.public_url"):
             validate_env()
@@ -240,3 +220,158 @@ class TestAuthEnforcement:
                     json=payload,
                 )
                 assert valid_auth.status_code != 401
+
+
+class TestOAuthEndToEnd:
+    """End-to-end OAuth flow: DCR → authorize → token → call tool."""
+
+    @staticmethod
+    def _build_oauth_app() -> tuple[Starlette, str]:
+        mcp = FastMCP("oauth-e2e-test")
+
+        @mcp.tool()
+        async def ping() -> dict[str, str]:
+            return {"status": "ok"}
+
+        provider = HomelabOAuthProvider()
+        mcp.settings.auth = AuthSettings(
+            issuer_url=AnyHttpUrl("http://localhost:8000"),
+            resource_server_url=AnyHttpUrl("http://localhost:8000"),
+            client_registration_options=ClientRegistrationOptions(enabled=True),
+            revocation_options=RevocationOptions(enabled=True),
+        )
+        mcp._auth_server_provider = provider
+        mcp._token_verifier = ProviderTokenVerifier(provider)
+        return mcp.streamable_http_app(), mcp.settings.streamable_http_path
+
+    @pytest.mark.asyncio
+    async def test_oauth_flow_grants_tool_access(self) -> None:
+        app, endpoint = self._build_oauth_app()
+
+        # PKCE setup
+        code_verifier = base64.urlsafe_b64encode(b"a" * 32).decode().rstrip("=")
+        code_challenge = (
+            base64.urlsafe_b64encode(
+                hashlib.sha256(code_verifier.encode()).digest(),
+            )
+            .decode()
+            .rstrip("=")
+        )
+
+        headers = {
+            "accept": "application/json, text/event-stream",
+            "content-type": "application/json",
+        }
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.0.1"},
+            },
+        }
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver",
+            ) as client:
+                # Step 1: Unauthenticated request is rejected
+                no_auth = await client.post(endpoint, headers=headers, json=payload)
+                assert no_auth.status_code == 401
+
+                # Step 2: Register client via DCR
+                reg = await client.post(
+                    "/register",
+                    json={
+                        "client_name": "E2E Test Client",
+                        "redirect_uris": ["http://localhost:3000/callback"],
+                        "response_types": ["code"],
+                        "grant_types": ["authorization_code", "refresh_token"],
+                        "token_endpoint_auth_method": "client_secret_post",
+                    },
+                )
+                assert reg.status_code == 201
+                client_info = reg.json()
+                client_id = client_info["client_id"]
+                client_secret = client_info["client_secret"]
+
+                # Step 3: Authorize (auto-approve returns redirect with code)
+                auth_resp = await client.get(
+                    "/authorize",
+                    params={
+                        "client_id": client_id,
+                        "redirect_uri": "http://localhost:3000/callback",
+                        "response_type": "code",
+                        "code_challenge": code_challenge,
+                        "code_challenge_method": "S256",
+                        "state": "test-state",
+                    },
+                    follow_redirects=False,
+                )
+                assert auth_resp.status_code == 302
+                redirect_url = auth_resp.headers["location"]
+                code = parse_qs(urlparse(redirect_url).query)["code"][0]
+
+                # Step 4: Exchange code for tokens
+                token_resp = await client.post(
+                    "/token",
+                    data={
+                        "grant_type": "authorization_code",
+                        "code": code,
+                        "redirect_uri": "http://localhost:3000/callback",
+                        "client_id": client_id,
+                        "client_secret": client_secret,
+                        "code_verifier": code_verifier,
+                    },
+                )
+                assert token_resp.status_code == 200
+                tokens = token_resp.json()
+                access_token = tokens["access_token"]
+
+                # Step 5: Authenticated request succeeds
+                authed = await client.post(
+                    endpoint,
+                    headers={
+                        **headers,
+                        "authorization": f"Bearer {access_token}",
+                    },
+                    json=payload,
+                )
+                assert authed.status_code != 401
+
+    @pytest.mark.asyncio
+    async def test_wrong_bearer_token_rejected_with_oauth(self) -> None:
+        app, endpoint = self._build_oauth_app()
+
+        headers = {
+            "accept": "application/json, text/event-stream",
+            "content-type": "application/json",
+        }
+        payload = {
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "test", "version": "0.0.1"},
+            },
+        }
+
+        async with app.router.lifespan_context(app):
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(
+                transport=transport, base_url="http://testserver",
+            ) as client:
+                bad_auth = await client.post(
+                    endpoint,
+                    headers={
+                        **headers,
+                        "authorization": "Bearer totally-fake-token",
+                    },
+                    json=payload,
+                )
+                assert bad_auth.status_code == 401
