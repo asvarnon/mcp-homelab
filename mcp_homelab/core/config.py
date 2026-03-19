@@ -6,7 +6,9 @@ No secrets are ever stored in config.yaml.
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -15,6 +17,8 @@ import warnings
 from ruamel.yaml import YAML
 from dotenv import load_dotenv
 from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class HostConfig(BaseModel):
@@ -114,12 +118,36 @@ def get_config_dir() -> Path:
     return Path.cwd()
 
 
+_IS_POSIX = os.name != "nt"
+
+
+def _warn_file_permissions(path: Path, max_mode: int, label: str) -> None:
+    """Log a warning if *path* has permissions more open than *max_mode*.
+
+    Only group/other bits are checked — owner-only bits (e.g. execute)
+    are ignored since they don't affect exposure to other users.
+    Skipped on Windows where POSIX permission bits don't apply.
+    """
+    if not _IS_POSIX or not path.is_file():
+        return
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    exposure = mode & (stat.S_IRWXG | stat.S_IRWXO)
+    if exposure & ~max_mode:
+        logger.warning(
+            "%s (%s) has mode %04o — expected %04o or stricter. "
+            "Run: chmod %04o %s",
+            label, path, mode, max_mode, max_mode, path,
+        )
+
+
 def load_env() -> None:
     """Load the .env file from the config directory.
 
     Must be called before any env-var accessors are used.
     """
-    load_dotenv(get_config_dir() / ".env")
+    env_path = get_config_dir() / ".env"
+    _warn_file_permissions(env_path, 0o600, ".env")
+    load_dotenv(env_path)
 
 
 _WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})

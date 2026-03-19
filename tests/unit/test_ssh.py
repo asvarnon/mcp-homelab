@@ -8,13 +8,14 @@ Java comparison: Testing a connection pool manager with mocked JDBC connections.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from mcp_homelab.core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
-from mcp_homelab.core.ssh import SSHError, SSHManager
+from mcp_homelab.core.ssh import SSHError, SSHManager, _validate_key_permissions
 
 
 @pytest.fixture()
@@ -197,3 +198,79 @@ class TestClose:
         mock1.close.assert_called_once()
         mock2.close.assert_called_once()
         assert len(ssh_manager._connections) == 0
+
+
+class TestValidateKeyPermissions:
+    """_validate_key_permissions mirrors OpenSSH: reject group/other-accessible keys."""
+
+    def test_raises_on_group_readable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.ssh._IS_POSIX", True)
+        key = tmp_path / "id_ed25519"
+        key.write_text("fake-key\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(key):
+                return type("S", (), {"st_mode": 0o100640})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.ssh.os.stat", _selective_stat)
+
+        with pytest.raises(SSHError, match="too open"):
+            _validate_key_permissions(str(key))
+
+    def test_raises_on_world_readable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.ssh._IS_POSIX", True)
+        key = tmp_path / "id_ed25519"
+        key.write_text("fake-key\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(key):
+                return type("S", (), {"st_mode": 0o100644})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.ssh.os.stat", _selective_stat)
+
+        with pytest.raises(SSHError, match="too open"):
+            _validate_key_permissions(str(key))
+
+    def test_passes_on_strict_permissions(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.ssh._IS_POSIX", True)
+        key = tmp_path / "id_ed25519"
+        key.write_text("fake-key\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(key):
+                return type("S", (), {"st_mode": 0o100600})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.ssh.os.stat", _selective_stat)
+
+        _validate_key_permissions(str(key))  # should not raise
+
+    def test_skipped_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.ssh._IS_POSIX", False)
+        key = tmp_path / "id_ed25519"
+        key.write_text("fake-key\n")
+
+        _validate_key_permissions(str(key))  # should not raise regardless
+
+    def test_skipped_when_file_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.ssh._IS_POSIX", True)
+
+        _validate_key_permissions(str(tmp_path / "nonexistent"))  # should not raise

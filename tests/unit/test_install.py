@@ -298,3 +298,74 @@ def _seed_install_tree(base_path: Path) -> Path:
     (install_path / "pyproject.toml").write_text("[project]\nname = 'mcp-homelab'\n", encoding="utf-8")
     (install_path / "config.yaml").write_text("hosts: {}\n", encoding="utf-8")
     return install_path
+
+
+class TestInstallPermissions:
+    """run_install hardens .env (0600) and config.yaml (0640) after chown."""
+
+    def test_chmods_env_and_config(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = _seed_install_tree(tmp_path)
+        env_file = install_path / ".env"
+        env_file.write_text("SECRET=value\n", encoding="utf-8")
+
+        chmod_calls: list[tuple[str, int]] = []
+
+        def tracking_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+            chmod_calls.append((str(path), mode))
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if command[:2] == ["id", "mcp"]:
+                return subprocess.CompletedProcess(command, 0, "uid=999(mcp)", "")
+            if command[0] == "systemctl" and command[1] == "is-active":
+                return subprocess.CompletedProcess(command, 0, "active\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
+        monkeypatch.setattr("mcp_homelab.setup.install.os.geteuid", lambda: 0, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_install_path", lambda: install_path)
+        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *a, **kw: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_container", lambda: None)
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", tracking_chmod)
+
+        run_install(public_url="https://mcp.example.com")
+
+        env_chmod = [(p, m) for p, m in chmod_calls if ".env" in p]
+        config_chmod = [(p, m) for p, m in chmod_calls if "config.yaml" in p]
+        assert len(env_chmod) == 1
+        assert env_chmod[0][1] == 0o600
+        assert len(config_chmod) == 1
+        assert config_chmod[0][1] == 0o640
+
+    def test_skips_chmod_when_files_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = _seed_install_tree(tmp_path)
+        # Remove config.yaml to test the if-exists guard
+        (install_path / "config.yaml").unlink()
+        # .env doesn't exist either
+
+        chmod_calls: list[tuple[str, int]] = []
+
+        def tracking_chmod(path: object, mode: int, *args: object, **kwargs: object) -> None:
+            chmod_calls.append((str(path), mode))
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            if command[:2] == ["id", "mcp"]:
+                return subprocess.CompletedProcess(command, 0, "uid=999(mcp)", "")
+            if command[0] == "systemctl" and command[1] == "is-active":
+                return subprocess.CompletedProcess(command, 0, "active\n", "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
+        monkeypatch.setattr("mcp_homelab.setup.install.os.geteuid", lambda: 0, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_install_path", lambda: install_path)
+        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *a, **kw: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_container", lambda: None)
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", tracking_chmod)
+
+        # config.yaml missing → run_install exits at step 7, but chmod is at step 5
+
+        with pytest.raises(SystemExit):
+            run_install(public_url="https://mcp.example.com")
+
+        assert not chmod_calls

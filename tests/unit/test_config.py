@@ -19,6 +19,7 @@ from mcp_homelab.core.config import (
     HostConfig,
     OPNsenseConfig,
     ProxmoxConfig,
+    _warn_file_permissions,
     bootstrap_config_dir,
     get_config_dir,
     load_config,
@@ -314,3 +315,104 @@ class TestConfiguredHelpers:
             yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}}}, f)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
         assert opnsense_configured() is False
+
+
+# ===========================================================================
+# File permission warnings
+# ===========================================================================
+
+
+class TestWarnFilePermissions:
+    """_warn_file_permissions logs when a file is more open than expected."""
+
+    def test_warns_on_world_readable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100644})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert any("0644" in r.message and ".env" in r.message for r in caplog.records)
+
+    def test_silent_when_strict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100600})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_ignores_owner_execute_bit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Owner-only bits like execute don't indicate exposure to others."""
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100700})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_skipped_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", False)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_skipped_when_file_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        missing = tmp_path / "nonexistent"
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(missing, 0o600, ".env")
+
+        assert not caplog.records

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import stat
 from typing import TYPE_CHECKING
 
 import paramiko
@@ -23,6 +25,29 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _SSH_TIMEOUT = 10  # seconds — connect + command timeout
+_IS_POSIX = os.name != "nt"
+
+
+def _validate_key_permissions(key_path: str) -> None:
+    """Refuse to use an SSH key with overly permissive file permissions.
+
+    Mirrors OpenSSH behavior: key files must not be readable by
+    group or others.  Skipped on Windows where POSIX permission
+    bits don't apply.
+    """
+    if not _IS_POSIX:
+        return
+    path = Path(key_path)
+    if not path.is_file():
+        return  # let paramiko report the missing file
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    if mode & (stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP
+               | stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH):
+        raise SSHError(
+            f"SSH key {key_path} has mode {mode:04o} — too open. "
+            f"Keys must not be accessible by group or others. "
+            f"Run: chmod 600 {key_path}"
+        )
 
 
 class SSHError(Exception):
@@ -86,6 +111,8 @@ class SSHManager:
         # Per-node credentials override global env var fallbacks
         username = node.ssh_user or get_ssh_user()
         key_path = str(Path(node.ssh_key_path).expanduser()) if node.ssh_key_path else str(get_ssh_key_path())
+
+        _validate_key_permissions(key_path)
 
         try:
             client.connect(
