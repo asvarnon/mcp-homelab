@@ -8,11 +8,11 @@ Run mcp-homelab as a Docker container with HTTP transport and OAuth 2.1 authenti
 
 Docker deployment is one of three supported deployment options:
 
-| Option             | Transport    | Use Case                                               |
-| ------------------ | ------------ | ------------------------------------------------------ |
-| **Local (stdio)**  | stdio        | Claude Desktop on same machine, `mcp-homelab serve`    |
+| Option               | Transport    | Use Case                                               |
+| -------------------- | ------------ | ------------------------------------------------------ |
+| **Local (stdio)**    | stdio        | Claude Desktop on same machine, `mcp-homelab serve`    |
 | **LXC / bare-metal** | HTTP + OAuth | Dedicated server, `mcp-homelab install` → systemd unit |
-| **Docker**         | HTTP + OAuth | Container-based deployment, `docker compose up`        |
+| **Docker**           | HTTP + OAuth | Container-based deployment, `docker compose up`        |
 
 Docker and LXC/bare-metal both use HTTP transport with OAuth 2.1 — the only difference is packaging.
 
@@ -108,10 +108,10 @@ volumes:
 
 Map your host keys accordingly:
 
-| Host Path | Container Path |
-|-----------|---------------|
-| `~/.ssh/gamehost` | `/keys/gamehost` |
-| `~/.ssh/id_ed25519` | `/keys/id_ed25519` |
+| Host Path               | Container Path         |
+| ----------------------- | ---------------------- |
+| `~/.ssh/gamehost`       | `/keys/gamehost`       |
+| `~/.ssh/id_ed25519`     | `/keys/id_ed25519`     |
 | `~/.ssh/id_ed25519_pve` | `/keys/id_ed25519_pve` |
 
 If you prefer to mount individual keys instead of the entire `.ssh` directory:
