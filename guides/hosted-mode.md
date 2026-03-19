@@ -77,7 +77,10 @@ Or omit `--public-url` and the command will prompt for it interactively.
 4. Set file ownership (`chown -R mcp:mcp`)
 5. Resolve public HTTPS URL (from `--public-url` arg or interactive prompt)
 6. Update `config.yaml` — `transport: http`, `host: 0.0.0.0`, `port: 8000`, `public_url`
-7. Render and install systemd unit (`deploy/mcp-homelab.service` template)
+7. Render and install systemd unit (`mcp_homelab/data/mcp-homelab.service` template)
+   - Auto-detects unprivileged containers (LXC, Docker) via `systemd-detect-virt`
+   - Strips namespace-dependent sandbox directives in containers (logs `⚠` warning)
+   - Preserves `NoNewPrivileges=true` and `LockPersonality=true` (use prctl, not namespaces)
 8. `systemctl daemon-reload` + `enable` + `start`
 9. Verify service is active
 10. Print next steps (network accessibility, guides reference)

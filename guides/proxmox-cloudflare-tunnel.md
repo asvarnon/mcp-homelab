@@ -131,6 +131,8 @@ sudo .venv/bin/mcp-homelab install --public-url "https://mcp.example.com"
 
 This creates the `mcp` service user, sets ownership, updates config.yaml for HTTP transport, installs the systemd unit, and starts the service.
 
+> **LXC containers:** `install` auto-detects unprivileged containers via `systemd-detect-virt` and strips sandbox directives (`PrivateTmp`, `ProtectSystem`, etc.) that require mount namespaces. Look for the `⚠` marker in step 8 output. If detection fails, the full sandbox is preserved (safe default).
+
 If you prefer to do each step manually (or need to customize), the manual steps are below.
 
 <details>
@@ -277,11 +279,13 @@ Ask Claude.ai to run:
 
 ### Service won't start
 
-| Error                                    | Cause                                            | Fix                                                                         |
-| ---------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
-| `Missing required environment variables` | `.env` missing API credentials                   | Run `mcp-homelab setup proxmox` / `setup opnsense`                          |
-| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url` | Add `public_url` to config.yaml                                             |
-| `ModuleNotFoundError`                    | venv not activated or deps missing               | Check `systemctl cat mcp-homelab` — ExecStart should use `.venv/bin/python` |
+| Error                                    | Cause                                                    | Fix                                                                                    |
+| ---------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| `Missing required environment variables` | `.env` has empty placeholders from `init`                | Fill in real values: `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, etc. in `.env`        |
+| `status=226/NAMESPACE`                   | Systemd sandbox directives need mount namespaces (no LXC)| Re-run `mcp-homelab install` — auto-detects containers and strips incompatible directives |
+| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url`         | Add `public_url` to config.yaml                                                        |
+| `ModuleNotFoundError`                    | venv not activated or deps missing                       | Check `systemctl cat mcp-homelab` — ExecStart should use `.venv/bin/python`            |
+| `Input should be a valid dictionary`     | `hosts:` key in config.yaml is null (commented-out only) | Add at least one host, or delete the `hosts:` key entirely                             |
 
 ### Claude.ai can't connect
 
@@ -346,5 +350,5 @@ systemctl status cloudflared
 - **`.env` is chmod 400** — only the `mcp` user can read it
 - **SSH key** (`/home/mcp/.ssh/id_ed25519`) gives the MCP server access to infrastructure hosts — treat as sensitive
 - **Tunnel token is a secret** — never commit to git or pass via command-line args (use env var or stdin)
-- **systemd hardening** — `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`, writes only to `/opt/mcp-homelab`
+- **systemd hardening** — `NoNewPrivileges=true`, `PrivateTmp=true`, `ProtectSystem=strict`, writes only to `/opt/mcp-homelab`. In unprivileged LXC containers, `install` auto-strips namespace-dependent directives (`PrivateTmp`, `ProtectSystem`, etc.) and logs a `⚠` warning
 - **No password auth** — all SSH is key-based
