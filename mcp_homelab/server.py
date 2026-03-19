@@ -22,7 +22,7 @@ from mcp.server.fastmcp import FastMCP
 
 from mcp_homelab.tools import nodes, proxmox, opnsense, discovery, context_gen
 from mcp_homelab.tools.nodes import NodeSummary, NodeStatus, ContainerInfo
-from mcp_homelab.tools.proxmox import VmSummary, VmStatus
+from mcp_homelab.tools.proxmox import VmSummary, VmStatus, VmCreateResult
 
 mcp = FastMCP("homelab")
 
@@ -151,6 +151,46 @@ async def create_lxc(
         ip_config=ip_config,
         ssh_public_key=ssh_public_key,
         unprivileged=unprivileged,
+        start_after_create=start_after_create,
+    )
+
+
+@mcp.tool()
+async def create_vm(
+    node: str,
+    iso: str,
+    name: str | None = None,
+    vmid: int | None = None,
+    cores: int = 1,
+    sockets: int = 1,
+    cpu_type: str = "host",
+    memory_mb: int = 1024,
+    disk_gb: int = 16,
+    storage: str | None = None,
+    bridge: str | None = None,
+    vlan_tag: int | None = None,
+    ostype: str = "l26",
+    scsihw: str = "virtio-scsi-single",
+    balloon: int = 0,
+    start_after_create: bool = False,
+) -> VmCreateResult | dict:
+    """Create a new VM on Proxmox. Use list_storage to discover valid storage values. ISOs are at local:iso/<filename>."""
+    return await proxmox.create_vm(
+        node=node,
+        iso=iso,
+        name=name,
+        vmid=vmid,
+        cores=cores,
+        sockets=sockets,
+        cpu_type=cpu_type,
+        memory_mb=memory_mb,
+        disk_gb=disk_gb,
+        storage=storage,
+        bridge=bridge,
+        vlan_tag=vlan_tag,
+        ostype=ostype,
+        scsihw=scsihw,
+        balloon=balloon,
         start_after_create=start_after_create,
     )
 

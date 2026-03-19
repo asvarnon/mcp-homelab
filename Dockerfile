@@ -2,14 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
+RUN pip install --no-cache-dir .
 
-# Secrets injected via environment variables at runtime
-# e.g. docker run --env-file .env mcp-homelab
+ENV MCP_HOMELAB_CONFIG_DIR=/config
 
 EXPOSE 8000
 
-CMD ["python", "server.py"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/.well-known/oauth-authorization-server')" || exit 1
+
+CMD ["mcp-homelab", "serve"]
