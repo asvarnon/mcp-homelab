@@ -466,6 +466,7 @@ async def create_lxc(
         next_id = await get_next_vmid()
         if not isinstance(next_id, int):
             raise RuntimeError("get_next_vmid returned unexpected type")
+        _validate_vmid(next_id)
         vmid = next_id
     else:
         _validate_vmid(vmid)
@@ -583,6 +584,7 @@ async def create_vm(
         next_id = await get_next_vmid()
         if not isinstance(next_id, int):
             raise RuntimeError("get_next_vmid returned unexpected type")
+        _validate_vmid(next_id)
         vmid = next_id
     else:
         _validate_vmid(vmid)
