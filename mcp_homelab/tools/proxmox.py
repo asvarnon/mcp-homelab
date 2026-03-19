@@ -351,6 +351,7 @@ async def create_lxc(
     ip_config: str = "ip=dhcp",
     ssh_public_key: str | None = None,
     unprivileged: bool = True,
+    features: str | None = None,
     start_after_create: bool = False,
     password: str | None = None,
 ) -> LxcCreateResult | dict:
@@ -373,6 +374,7 @@ async def create_lxc(
         ip_config: IP configuration string (default: "ip=dhcp").
         ssh_public_key: Optional SSH public key to inject.
         unprivileged: Whether to create an unprivileged container.
+        features: Optional Proxmox LXC feature string (e.g. "nesting=1,keyctl=1").
         start_after_create: Whether to start the container after creation.
         password: Optional root password. Not exposed via MCP to avoid leaking secrets into LLM transcripts. Use ssh_public_key for key-based auth instead.
 
@@ -428,6 +430,8 @@ async def create_lxc(
         data["hostname"] = hostname
     if ssh_public_key is not None:
         data["ssh-public-keys"] = ssh_public_key
+    if features is not None:
+        data["features"] = features
     if password is not None:
         data["password"] = password
 

@@ -513,6 +513,29 @@ class TestCreateLxc:
         assert posted_data["password"] == "s3cret"
 
     @pytest.mark.asyncio
+    async def test_optional_features(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
+        await create_lxc(
+            node="test-node-2",
+            ostemplate="local:vztmpl/debian-12.tar.zst",
+            vmid=300,
+            features="nesting=1,keyctl=1",
+        )
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data["features"] == "nesting=1,keyctl=1"
+
+    @pytest.mark.asyncio
+    async def test_features_omitted_when_none(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:300"
+        await create_lxc(
+            node="test-node-2",
+            ostemplate="local:vztmpl/debian-12.tar.zst",
+            vmid=300,
+        )
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert "features" not in posted_data
+
+    @pytest.mark.asyncio
     async def test_uses_config_defaults_when_storage_and_bridge_are_none(
         self,
         monkeypatch: pytest.MonkeyPatch,
