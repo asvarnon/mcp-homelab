@@ -214,9 +214,15 @@ def run_install(public_url: str | None = None) -> None:
         )
         print("  → created service user mcp ✓")
 
-    print("[5/10] Setting ownership...")
+    print("[5/10] Setting ownership and permissions...")
     _run_command(["chown", "-R", "mcp:mcp", str(install_path)], "set ownership")
-    print("  → ownership set to mcp:mcp ✓")
+    env_file = install_path / ".env"
+    if env_file.exists():
+        os.chmod(env_file, 0o600)
+    config_file = install_path / "config.yaml"
+    if config_file.exists():
+        os.chmod(config_file, 0o640)
+    print("  → ownership and permissions set ✓")
 
     print("[6/10] Resolving public URL...")
     resolved_public_url = _resolve_public_url(public_url)
