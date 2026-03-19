@@ -5,7 +5,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config:/config:ro
-      - ~/.ssh:/keys:ro
+      - ${HOME}/.ssh:/keys:ro
     environment:
       - MCP_HOMELAB_CONFIG_DIR=/config
     restart: unless-stopped

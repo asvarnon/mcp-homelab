@@ -99,11 +99,11 @@ You should see JSON with `issuer`, `authorization_endpoint`, `token_endpoint`, e
 
 SSH key paths in `config.yaml` must reference **container paths**, not host paths.
 
-The default `docker-compose.yml` mounts `~/.ssh` to `/keys` (read-only):
+The default `docker-compose.yml` mounts `$HOME/.ssh` to `/keys` (read-only):
 
 ```yaml
 volumes:
-  - ~/.ssh:/keys:ro
+  - ${HOME}/.ssh:/keys:ro
 ```
 
 Map your host keys accordingly:
@@ -118,8 +118,8 @@ If you prefer to mount individual keys instead of the entire `.ssh` directory:
 
 ```yaml
 volumes:
-  - ~/.ssh/gamehost:/keys/gamehost:ro
-  - ~/.ssh/id_ed25519_pve:/keys/pve:ro
+  - ${HOME}/.ssh/gamehost:/keys/gamehost:ro
+  - ${HOME}/.ssh/id_ed25519_pve:/keys/pve:ro
 ```
 
 ---
@@ -144,6 +144,7 @@ This is the default in `docker-compose.yml` and the recommended approach.
 Pass the env file directly to Docker (not read by the app — Docker injects vars into the container environment):
 
 ```bash
+docker build -t mcp-homelab .
 docker run --env-file .env -v ./config:/config:ro mcp-homelab
 ```
 
@@ -188,7 +189,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config:/config:ro        # config.yaml + .env
-      - ~/.ssh:/keys:ro            # SSH keys
+      - ${HOME}/.ssh:/keys:ro      # SSH keys
     environment:
       - MCP_HOMELAB_CONFIG_DIR=/config
     restart: unless-stopped
@@ -228,7 +229,7 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 Check container health:
 
 ```bash
-docker inspect --format='{{.State.Health.Status}}' mcp-homelab-mcp-homelab-1
+docker compose ps --format '{{.Name}} {{.Health}}'
 ```
 
 > **Note:** The health check only works when the server is running in HTTP transport mode.
