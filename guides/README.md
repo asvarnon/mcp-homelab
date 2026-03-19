@@ -6,10 +6,12 @@ The [Quick Start](../README.md#quick-start) in the main README covers the defaul
 
 ## Available Guides
 
-| Guide                                                           | Description                                                                                                         |
-| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| [Hosted Mode Overview](hosted-mode.md)                          | What changes when you go from local to hosted, CLI commands for each step, and what `mcp-homelab install` automates |
-| [Proxmox LXC + Cloudflare Tunnel](proxmox-cloudflare-tunnel.md) | Reference architecture: deploy to a Proxmox LXC container with Cloudflare Tunnel for public HTTPS access            |
+| Guide                                                             | Description                                                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| [Hosted Mode Overview](hosted-mode.md)                            | What changes when you go from local to hosted, CLI commands for each step, and what `mcp-homelab install` automates |
+| [Proxmox VM + Cloudflare Tunnel](proxmox-vm-cloudflare-tunnel.md) | **Recommended:** deploy to a Proxmox VM with full systemd sandboxing and Cloudflare Tunnel                          |
+| [Proxmox LXC + Cloudflare Tunnel](proxmox-cloudflare-tunnel.md)   | Lightweight alternative: deploy to a Proxmox LXC container (sandbox directives stripped automatically)              |
+| [Docker Deployment](docker-deployment.md)                         | Container-based deployment with Docker Compose                                                                      |
 
 ## Adding Your Own Guide
 
