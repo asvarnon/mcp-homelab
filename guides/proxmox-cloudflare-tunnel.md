@@ -104,7 +104,7 @@ ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP>
 apt-get update && apt-get install -y python3 python3-pip python3-venv git curl
 
 # Clone the repository
-git clone -b main https://github.com/asvarnon/mcp-homelab.git /opt/mcp-homelab
+git clone https://github.com/asvarnon/mcp-homelab.git /opt/mcp-homelab
 cd /opt/mcp-homelab
 
 # Create venv and install
@@ -174,8 +174,14 @@ Or use `mcp-homelab setup ssh` on each target host to automate key provisioning.
 
 ### Install systemd unit
 
+The recommended approach is `mcp-homelab install`, which handles the systemd unit automatically. If you need to install manually:
+
 ```bash
-cp /opt/mcp-homelab/deploy/mcp-homelab.service /etc/systemd/system/
+# Locate the bundled template
+python3 -c "import importlib.resources; print(importlib.resources.files('mcp_homelab.data').joinpath('mcp-homelab.service'))"
+
+# Copy it to systemd
+cp $(python3 -c "import importlib.resources; print(importlib.resources.files('mcp_homelab.data').joinpath('mcp-homelab.service'))") /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now mcp-homelab
 
@@ -279,13 +285,13 @@ Ask Claude.ai to run:
 
 ### Service won't start
 
-| Error                                    | Cause                                                    | Fix                                                                                    |
-| ---------------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `Missing required environment variables` | `.env` has empty placeholders from `init`                | Fill in real values: `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, etc. in `.env`        |
-| `status=226/NAMESPACE`                   | Systemd sandbox directives need mount namespaces (no LXC)| Re-run `mcp-homelab install` — auto-detects containers and strips incompatible directives |
-| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url`         | Add `public_url` to config.yaml                                                        |
-| `ModuleNotFoundError`                    | venv not activated or deps missing                       | Check `systemctl cat mcp-homelab` — ExecStart should use `.venv/bin/python`            |
-| `Input should be a valid dictionary`     | `hosts:` key in config.yaml is null (commented-out only) | Add at least one host, or delete the `hosts:` key entirely                             |
+| Error                                    | Cause                                                     | Fix                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `Missing required environment variables` | `.env` has empty placeholders from `init`                 | Fill in real values: `PROXMOX_TOKEN_ID`, `PROXMOX_TOKEN_SECRET`, etc. in `.env`           |
+| `status=226/NAMESPACE`                   | Systemd sandbox directives need mount namespaces (no LXC) | Re-run `mcp-homelab install` — auto-detects containers and strips incompatible directives |
+| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url`          | Add `public_url` to config.yaml                                                           |
+| `ModuleNotFoundError`                    | venv not activated or deps missing                        | Check `systemctl cat mcp-homelab` — ExecStart should use `.venv/bin/python`               |
+| `Input should be a valid dictionary`     | `hosts:` key in config.yaml is null (commented-out only)  | Add at least one host, or delete the `hosts:` key entirely                                |
 
 ### Claude.ai can't connect
 

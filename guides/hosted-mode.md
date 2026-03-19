@@ -180,6 +180,6 @@ For remote validation, connect from a client and run a tool (e.g., `list_nodes`)
 | Cloudflare Tunnel setup   | [proxmox-cloudflare-tunnel.md](proxmox-cloudflare-tunnel.md) guide    |
 | Proxmox LXC SSH bootstrap | [proxmox-cloudflare-tunnel.md](proxmox-cloudflare-tunnel.md) guide    |
 
-**Action:** Now that `mcp-homelab install` exists, `deploy.py` can be moved to `examples/deploy-reference.py` as a historical reference. The `deploy/mcp-homelab.service` template stays — the `install` command reads it.
+**Action:** Now that `mcp-homelab install` exists, `deploy.py` can be moved to `examples/deploy-reference.py` as a historical reference. The systemd template is bundled as package data at `mcp_homelab/data/mcp-homelab.service` and the `install` command reads it via `importlib.resources`.
 
-> **Note:** The systemd unit at `deploy/mcp-homelab.service` assumes `/opt/mcp-homelab/` as the install path. If installing elsewhere, edit the `WorkingDirectory`, `EnvironmentFile`, and `ExecStart` paths before copying.
+> **Note:** The systemd unit assumes `/opt/mcp-homelab/` as the install path. If installing elsewhere, edit the `WorkingDirectory`, `EnvironmentFile`, and `ExecStart` paths before copying.

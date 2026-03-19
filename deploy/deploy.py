@@ -156,6 +156,13 @@ def _ensure_ssh_key(ssh_key: Path) -> None:
     print("SSH key generated.")
 
 
+def _format_host_for_url(host: str) -> str:
+    """Wrap IPv6 hosts in brackets for URL/authority formatting."""
+    if ":" in host and not host.startswith("[") and not host.endswith("]"):
+        return f"[{host}]"
+    return host
+
+
 def main() -> int:
     args: argparse.Namespace = parse_args()
 
@@ -469,7 +476,8 @@ def main() -> int:
     current_step += 1
 
     print(f"Step {current_step}/{total_steps}: Deployment summary")
-    print(f"MCP server:     http://{host}:{port}/mcp (local)")
+    summary_host: str = _format_host_for_url(host)
+    print(f"MCP server:     http://{summary_host}:{port}/ (local)")
     print(f"Public URL:     {public_url}")
     print(f"Tunnel status:  ssh {ssh_user}@{host} systemctl status cloudflared")
     return 0

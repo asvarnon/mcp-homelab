@@ -258,12 +258,19 @@ def start_server() -> None:
         # Claude.ai posts to "/" not "/mcp" — serve the MCP endpoint at root.
         mcp.settings.streamable_http_path = "/"
 
+        def _format_host_for_url(host: str) -> str:
+            """Wrap IPv6 hosts in brackets for URL/authority formatting."""
+            if ":" in host and not host.startswith("[") and not host.endswith("]"):
+                return f"[{host}]"
+            return host
+
         # Derive the public URL used for OAuth metadata and Host header
         # validation.  HTTPS public_url is expected once a TLS terminator
         # (Cloudflare Tunnel / Caddy) is in front of this server.
+        formatted_host = _format_host_for_url(config.server.host)
         public_url = (
             str(config.server.public_url) if config.server.public_url
-            else f"http://{config.server.host}:{config.server.port}"
+            else f"http://{formatted_host}:{config.server.port}"
         )
 
         # Override DNS rebinding protection to allow the configured host.
@@ -271,7 +278,7 @@ def start_server() -> None:
         # re-bind to a non-localhost address so we must update allowed_hosts.
         # When public_url is set (TLS terminator in front), also allow that
         # host so OAuth/CORS requests from clients using the public URL work.
-        host_with_port = f"{config.server.host}:{config.server.port}"
+        host_with_port = f"{formatted_host}:{config.server.port}"
         allowed_hosts = [host_with_port]
         allowed_origins = [f"http://{host_with_port}"]
         if config.server.public_url:
