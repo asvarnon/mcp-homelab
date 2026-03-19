@@ -1,0 +1,11 @@
+services:
+  mcp-homelab:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./config:/config:ro
+      - ~/.ssh:/keys:ro
+    environment:
+      - MCP_HOMELAB_CONFIG_DIR=/config
+    restart: unless-stopped

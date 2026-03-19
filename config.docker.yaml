@@ -1,0 +1,44 @@
+# mcp-homelab Docker configuration example
+#
+# This config is designed for running inside a Docker container.
+# SSH key paths reference container paths (mounted via -v ~/.ssh:/keys:ro).
+# Place this file (as config.yaml) alongside your .env in the config volume.
+#
+# Volume mount:  -v /path/to/config-dir:/config:ro
+# Environment:   MCP_HOMELAB_CONFIG_DIR=/config
+
+server:
+  transport: http
+  host: 0.0.0.0
+  port: 8000
+  # public_url is REQUIRED when host is 0.0.0.0
+  # Set to the URL clients will use to reach this server.
+  public_url: http://10.10.10.112:8000
+
+hosts:
+  # SSH key paths must be container paths, not host paths.
+  # With -v ~/.ssh:/keys:ro, host key at ~/.ssh/gamehost becomes /keys/gamehost.
+  #
+  # my-server:
+  #   hostname: my-server
+  #   ip: "192.168.1.100"
+  #   vlan: 1
+  #   ssh: true
+  #   ssh_user: admin
+  #   ssh_key_path: /keys/id_ed25519
+  #   docker: true
+  #   sudo_docker: false
+  #   description: "My Linux server"
+  #   type: baremetal
+  #   os: linux
+
+# Optional — remove if you don't use Proxmox.
+# proxmox:
+#   host: "192.168.1.50"
+#   port: 8006
+#   verify_ssl: false
+
+# Optional — remove if you don't use OPNsense.
+# opnsense:
+#   host: "192.168.1.1"
+#   verify_ssl: false
