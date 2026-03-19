@@ -16,7 +16,11 @@ from mcp_homelab.tools.proxmox import (
     _resolve_default_node,
     _find_resource_node,
     _find_vm_node,
+    _validate_node,
+    _validate_safe_field,
+    _validate_vmid,
     create_lxc,
+    create_vm,
     get_lxc_status,
     get_next_vmid,
     get_vm_status,
@@ -641,6 +645,219 @@ class TestCreateLxcValidation:
         assert "tag=50" in posted_data["net0"]
 
 
+class TestCreateVm:
+    @pytest.mark.asyncio
+    async def test_builds_correct_payload(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:901"
+
+        result = await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            name="Monitoring-layer",
+            vmid=901,
+            cores=1,
+            sockets=1,
+            cpu_type="host",
+            memory_mb=1024,
+            disk_gb=16,
+            storage="local",
+            bridge="vmbr0",
+            ostype="l26",
+            scsihw="virtio-scsi-single",
+            balloon=0,
+            start_after_create=False,
+        )
+
+        assert result["vmid"] == 901
+        assert result["node"] == "test-node-2"
+        assert result["task_id"] == "UPID:test-node-2:create:901"
+
+        call_args = mock_proxmox_client.post.call_args
+        assert call_args[0][0] == "/nodes/test-node-2/qemu"
+        posted_data = call_args[1]["data"] if "data" in call_args[1] else call_args[0][1]
+        assert posted_data["vmid"] == 901
+        assert posted_data["cores"] == 1
+        assert posted_data["sockets"] == 1
+        assert posted_data["cpu"] == "host"
+        assert posted_data["memory"] == 1024
+        assert posted_data["ostype"] == "l26"
+        assert posted_data["scsihw"] == "virtio-scsi-single"
+        assert posted_data["balloon"] == 0
+        assert posted_data["ide2"] == "local:iso/debian-13.3.0-amd64-netinst.iso,media=cdrom"
+        assert posted_data["scsi0"] == "local:16,iothread=1"
+        assert posted_data["net0"] == "model=virtio,bridge=vmbr0"
+        assert posted_data["boot"] == "order=scsi0;ide2;net0"
+        assert posted_data["start"] == 0
+        assert posted_data["numa"] == 0
+        assert posted_data["name"] == "Monitoring-layer"
+
+    @pytest.mark.asyncio
+    async def test_auto_assigns_vmid(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.get.return_value = 902
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:902"
+
+        result = await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=None,
+        )
+
+        assert result["vmid"] == 902
+        mock_proxmox_client.get.assert_called_with("/cluster/nextid")
+
+    @pytest.mark.asyncio
+    async def test_net0_with_vlan(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:903"
+
+        await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=903,
+            vlan_tag=10,
+        )
+
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data["net0"] == "model=virtio,bridge=vmbr0,tag=10"
+
+    @pytest.mark.asyncio
+    async def test_net0_without_vlan(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:904"
+
+        await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=904,
+        )
+
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data["net0"] == "model=virtio,bridge=vmbr0"
+        assert "tag=" not in posted_data["net0"]
+
+    @pytest.mark.asyncio
+    async def test_optional_name(self, mock_proxmox_client) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:905"
+
+        await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=905,
+            name="vm-with-name",
+        )
+        posted_data_with_name = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data_with_name["name"] == "vm-with-name"
+
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:906"
+        await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=906,
+            name=None,
+        )
+        posted_data_without_name = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert "name" not in posted_data_without_name
+
+    @pytest.mark.asyncio
+    async def test_uses_config_defaults_when_storage_and_bridge_are_none(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        mock_proxmox_client,
+    ) -> None:
+        mock_proxmox_client.post.return_value = "UPID:test-node-2:create:907"
+        monkeypatch.setattr(
+            "mcp_homelab.tools.proxmox.get_proxmox_config",
+            lambda: ProxmoxConfig(
+                host="203.0.113.50",
+                default_storage="local-zfs",
+                default_bridge="vmbr1",
+            ),
+        )
+
+        await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=907,
+            storage=None,
+            bridge=None,
+        )
+
+        posted_data = mock_proxmox_client.post.call_args[1].get("data") or mock_proxmox_client.post.call_args[0][1]
+        assert posted_data["scsi0"] == "local-zfs:16,iothread=1"
+        assert posted_data["net0"] == "model=virtio,bridge=vmbr1"
+
+    @pytest.mark.asyncio
+    async def test_not_configured_returns_sentinel(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr("mcp_homelab.tools.proxmox.proxmox_configured", lambda: False)
+
+        result = await create_vm(
+            node="test-node-2",
+            iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+            vmid=908,
+        )
+
+        assert "error" in result
+        assert "not configured" in result["error"].lower()
+
+
+class TestCreateVmValidation:
+    @pytest.mark.asyncio
+    async def test_cores_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match=r"cores must be >= 1, got 0"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=909,
+                cores=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_sockets_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match=r"sockets must be >= 1, got 0"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=910,
+                sockets=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_memory_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match=r"memory_mb must be >= 64, got 0"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=911,
+                memory_mb=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_disk_below_minimum(self) -> None:
+        with pytest.raises(ValueError, match=r"disk_gb must be >= 1, got 0"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=912,
+                disk_gb=0,
+            )
+
+    @pytest.mark.asyncio
+    async def test_vlan_tag_out_of_range(self) -> None:
+        with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 0"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=913,
+                vlan_tag=0,
+            )
+
+        with pytest.raises(ValueError, match=r"vlan_tag must be in range 1-4094 when set, got 4095"):
+            await create_vm(
+                node="test-node-2",
+                iso="local:iso/debian-13.3.0-amd64-netinst.iso",
+                vmid=914,
+                vlan_tag=4095,
+            )
+
+
 # ===========================================================================
 # get_next_vmid
 # ===========================================================================
@@ -791,3 +1008,224 @@ class TestLxcNotConfigured:
         result = await list_templates()
         assert len(result) == 1
         assert "error" in result[0]
+
+
+# ===========================================================================
+# Input validation helpers (unit tests)
+# ===========================================================================
+
+
+class TestValidateSafeField:
+    """Comma injection prevention — _validate_safe_field rejects dangerous chars."""
+
+    def test_accepts_simple_name(self) -> None:
+        _validate_safe_field("local-lvm", "storage")
+
+    def test_accepts_iso_path(self) -> None:
+        _validate_safe_field("local:iso/debian-13.3.0-amd64-netinst.iso", "iso")
+
+    def test_accepts_template_volid(self) -> None:
+        _validate_safe_field("local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst", "ostemplate")
+
+    def test_rejects_comma(self) -> None:
+        with pytest.raises(ValueError, match="contains invalid characters"):
+            _validate_safe_field("local:iso/debian.iso,cache=none", "iso")
+
+    def test_rejects_space(self) -> None:
+        with pytest.raises(ValueError, match="contains invalid characters"):
+            _validate_safe_field("vmbr0 ,model=e1000", "bridge")
+
+    def test_rejects_semicolon(self) -> None:
+        with pytest.raises(ValueError, match="contains invalid characters"):
+            _validate_safe_field("local;rm -rf /", "storage")
+
+    def test_rejects_equals(self) -> None:
+        with pytest.raises(ValueError, match="contains invalid characters"):
+            _validate_safe_field("vmbr0=evil", "bridge")
+
+    def test_rejects_empty_string(self) -> None:
+        with pytest.raises(ValueError, match="contains invalid characters"):
+            _validate_safe_field("", "storage")
+
+
+class TestValidateNode:
+    """Node parameter validation — prevents path traversal."""
+
+    def test_accepts_simple_name(self) -> None:
+        _validate_node("pve")
+
+    def test_accepts_hyphenated_name(self) -> None:
+        _validate_node("pve-node-1")
+
+    def test_accepts_numeric_name(self) -> None:
+        _validate_node("node01")
+
+    def test_rejects_path_traversal(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            _validate_node("pve/../../../cluster/config")
+
+    def test_rejects_slash(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            _validate_node("pve/evil")
+
+    def test_rejects_empty(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            _validate_node("")
+
+    def test_rejects_starts_with_hyphen(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            _validate_node("-pve")
+
+
+class TestValidateVmid:
+    """VMID validation — Proxmox reserves IDs below 100."""
+
+    def test_accepts_100(self) -> None:
+        _validate_vmid(100)  # should not raise
+
+    def test_accepts_999(self) -> None:
+        _validate_vmid(999)  # should not raise
+
+    def test_rejects_99(self) -> None:
+        with pytest.raises(ValueError, match="vmid must be >= 100"):
+            _validate_vmid(99)
+
+    def test_rejects_1(self) -> None:
+        with pytest.raises(ValueError, match="vmid must be >= 100"):
+            _validate_vmid(1)
+
+    def test_rejects_zero(self) -> None:
+        with pytest.raises(ValueError, match="vmid must be >= 100"):
+            _validate_vmid(0)
+
+
+# ===========================================================================
+# Security validation — create_vm injection/boundary tests
+# ===========================================================================
+
+
+class TestCreateVmSecurityValidation:
+    """Tests for comma injection, path traversal, enum allowlisting, and bounds."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_iso_with_comma(self) -> None:
+        with pytest.raises(ValueError, match="iso contains invalid characters"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso,cache=none",
+                vmid=200,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_bridge_with_comma(self) -> None:
+        with pytest.raises(ValueError, match="bridge contains invalid characters"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                bridge="vmbr0,model=e1000",
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_storage_with_comma(self) -> None:
+        with pytest.raises(ValueError, match="storage contains invalid characters"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                storage="local,discard=on",
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_node_path_traversal(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            await create_vm(
+                node="pve/../../../cluster/config",
+                iso="local:iso/debian.iso",
+                vmid=200,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_vmid_below_100(self) -> None:
+        with pytest.raises(ValueError, match="vmid must be >= 100"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=99,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_negative_balloon(self) -> None:
+        with pytest.raises(ValueError, match="balloon must be >= 0"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                balloon=-1,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_ostype(self) -> None:
+        with pytest.raises(ValueError, match="ostype must be one of"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                ostype="evil",
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_scsihw(self) -> None:
+        with pytest.raises(ValueError, match="scsihw must be one of"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                scsihw="badcontroller",
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_invalid_cpu_type(self) -> None:
+        with pytest.raises(ValueError, match="cpu_type must be one of"):
+            await create_vm(
+                node="pve",
+                iso="local:iso/debian.iso",
+                vmid=200,
+                cpu_type="exploit-cpu",
+            )
+
+
+# ===========================================================================
+# Security validation — create_lxc injection/boundary tests
+# ===========================================================================
+
+
+class TestCreateLxcSecurityValidation:
+    """Tests for comma injection, path traversal, and vmid bounds on create_lxc."""
+
+    @pytest.mark.asyncio
+    async def test_rejects_ostemplate_with_comma(self) -> None:
+        with pytest.raises(ValueError, match="ostemplate contains invalid characters"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian.tar.zst,evil=1",
+                vmid=200,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_node_path_traversal(self) -> None:
+        with pytest.raises(ValueError, match="must be a valid hostname"):
+            await create_lxc(
+                node="pve/../etc",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=200,
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejects_vmid_below_100(self) -> None:
+        with pytest.raises(ValueError, match="vmid must be >= 100"):
+            await create_lxc(
+                node="pve",
+                ostemplate="local:vztmpl/debian-12.tar.zst",
+                vmid=50,
+            )

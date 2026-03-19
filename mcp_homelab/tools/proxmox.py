@@ -6,7 +6,9 @@ All functions use ProxmoxClient for transport — no direct httpx usage here.
 
 from __future__ import annotations
 
+import re
 from typing import Literal
+
 from typing_extensions import TypedDict
 
 from mcp_homelab.core.config import get_proxmox_config, proxmox_configured
@@ -66,6 +68,12 @@ class LxcCreateResult(TypedDict):
     task_id: str
 
 
+class VmCreateResult(TypedDict):
+    vmid: int
+    node: str
+    task_id: str
+
+
 class StorageInfo(TypedDict):
     storage: str
     type: str
@@ -94,6 +102,52 @@ _client = ProxmoxClient()
 _NOT_CONFIGURED: dict[str, str] = {
     "error": "Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env.",
 }
+
+# Proxmox config fields: safe characters for storage pool names, bridge names,
+# volume IDs (e.g. "local:iso/debian-13.iso"), and templates.
+_SAFE_FIELD_RE = re.compile(r"^[A-Za-z0-9_./:@-]+$")
+
+# Node names must be valid DNS hostnames.
+_NODE_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$")
+
+# Valid Proxmox guest OS types.
+_VALID_OSTYPES = frozenset({
+    "l24", "l26", "win7", "win8", "win10", "win11",
+    "wvista", "wxp", "w2k", "w2k3", "w2k8", "solaris", "other",
+})
+
+# Valid SCSI controller types.
+_VALID_SCSIHW = frozenset({
+    "virtio-scsi-pci", "virtio-scsi-single", "lsi", "lsi53c810",
+    "megasas", "pvscsi",
+})
+
+# Valid CPU types.
+_VALID_CPU_TYPES = frozenset({
+    "host", "kvm32", "kvm64", "qemu32", "qemu64",
+    "max", "x86-64-v2", "x86-64-v2-AES", "x86-64-v3", "x86-64-v4",
+})
+
+
+def _validate_safe_field(value: str, name: str) -> None:
+    """Reject values containing characters that could inject extra config options."""
+    if not _SAFE_FIELD_RE.match(value):
+        raise ValueError(
+            f"{name} contains invalid characters: {value!r}. "
+            f"Only alphanumerics, dots, underscores, slashes, colons, @, and hyphens are allowed."
+        )
+
+
+def _validate_node(node: str) -> None:
+    """Validate that a node name is a safe DNS hostname label."""
+    if not _NODE_RE.match(node):
+        raise ValueError(f"node must be a valid hostname, got {node!r}")
+
+
+def _validate_vmid(vmid: int) -> None:
+    """Validate that a VMID is in the Proxmox-allowed range (>= 100)."""
+    if vmid < 100:
+        raise ValueError(f"vmid must be >= 100 (Proxmox reserves IDs below 100), got {vmid}")
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +438,9 @@ async def create_lxc(
     if not proxmox_configured():
         return _NOT_CONFIGURED
 
-    # Input validation
+    # Input validation — field safety (comma injection prevention)
+    _validate_node(node)
+    _validate_safe_field(ostemplate, "ostemplate")
     if cores < 1:
         raise ValueError(f"cores must be >= 1, got {cores}")
     if memory_mb < 16:
@@ -403,11 +459,16 @@ async def create_lxc(
         if bridge is None:
             bridge = cfg.default_bridge if cfg else "vmbr0"
 
+    _validate_safe_field(storage, "storage")
+    _validate_safe_field(bridge, "bridge")
+
     if vmid is None:
         next_id = await get_next_vmid()
         if not isinstance(next_id, int):
             raise RuntimeError("get_next_vmid returned unexpected type")
         vmid = next_id
+    else:
+        _validate_vmid(vmid)
 
     rootfs = f"{storage}:{disk_gb}"
     net0 = f"name=eth0,bridge={bridge},{ip_config}"
@@ -438,6 +499,120 @@ async def create_lxc(
     task_id = await _client.post(f"/nodes/{node}/lxc", data=data)
 
     return LxcCreateResult(vmid=vmid, node=node, task_id=task_id)
+
+
+async def create_vm(
+    node: str,
+    iso: str,
+    name: str | None = None,
+    vmid: int | None = None,
+    cores: int = 1,
+    sockets: int = 1,
+    cpu_type: str = "host",
+    memory_mb: int = 1024,
+    disk_gb: int = 16,
+    storage: str | None = None,
+    bridge: str | None = None,
+    vlan_tag: int | None = None,
+    ostype: str = "l26",
+    scsihw: str = "virtio-scsi-single",
+    balloon: int = 0,
+    start_after_create: bool = False,
+) -> VmCreateResult | dict:
+    """Create a new VM on a Proxmox node.
+
+    Args:
+        node: Target PVE node name.
+        iso: Volume ID of the ISO image (e.g. "local:iso/debian-13.iso").
+        name: Optional VM name.
+        vmid: VM ID. Auto-assigned via get_next_vmid() if None.
+        cores: Number of CPU cores.
+        sockets: Number of CPU sockets.
+        cpu_type: CPU model presented to the VM.
+        memory_mb: RAM in megabytes.
+        disk_gb: Disk size in gigabytes.
+        storage: Storage pool for the main disk. Defaults to proxmox.default_storage
+            from config.yaml, or "local" if no config value is available.
+        bridge: Network bridge name. Defaults to proxmox.default_bridge from
+            config.yaml, or "vmbr0" if no config value is available.
+        vlan_tag: Optional VLAN tag for the network interface.
+        ostype: Proxmox guest OS type.
+        scsihw: Proxmox SCSI controller type.
+        balloon: Balloon memory setting (0 disables ballooning).
+        start_after_create: Whether to start the VM after creation.
+
+    Returns:
+        VmCreateResult dict with vmid, node, and task_id.
+    """
+    if not proxmox_configured():
+        return _NOT_CONFIGURED
+
+    # Input validation — field safety (comma injection prevention)
+    _validate_node(node)
+    _validate_safe_field(iso, "iso")
+    if cores < 1:
+        raise ValueError(f"cores must be >= 1, got {cores}")
+    if sockets < 1:
+        raise ValueError(f"sockets must be >= 1, got {sockets}")
+    if memory_mb < 64:
+        raise ValueError(f"memory_mb must be >= 64, got {memory_mb}")
+    if disk_gb < 1:
+        raise ValueError(f"disk_gb must be >= 1, got {disk_gb}")
+    if balloon < 0:
+        raise ValueError(f"balloon must be >= 0, got {balloon}")
+    if vlan_tag is not None and not (1 <= vlan_tag <= 4094):
+        raise ValueError(f"vlan_tag must be in range 1-4094 when set, got {vlan_tag}")
+    if ostype not in _VALID_OSTYPES:
+        raise ValueError(f"ostype must be one of {sorted(_VALID_OSTYPES)}, got {ostype!r}")
+    if scsihw not in _VALID_SCSIHW:
+        raise ValueError(f"scsihw must be one of {sorted(_VALID_SCSIHW)}, got {scsihw!r}")
+    if cpu_type not in _VALID_CPU_TYPES:
+        raise ValueError(f"cpu_type must be one of {sorted(_VALID_CPU_TYPES)}, got {cpu_type!r}")
+
+    if storage is None or bridge is None:
+        cfg = get_proxmox_config()
+        if storage is None:
+            storage = cfg.default_storage if cfg else "local"
+        if bridge is None:
+            bridge = cfg.default_bridge if cfg else "vmbr0"
+
+    _validate_safe_field(storage, "storage")
+    _validate_safe_field(bridge, "bridge")
+
+    if vmid is None:
+        next_id = await get_next_vmid()
+        if not isinstance(next_id, int):
+            raise RuntimeError("get_next_vmid returned unexpected type")
+        vmid = next_id
+    else:
+        _validate_vmid(vmid)
+
+    net0 = f"model=virtio,bridge={bridge}"
+    if vlan_tag is not None:
+        net0 += f",tag={vlan_tag}"
+
+    data: dict[str, str | int] = {
+        "vmid": vmid,
+        "cores": cores,
+        "sockets": sockets,
+        "cpu": cpu_type,
+        "memory": memory_mb,
+        "ostype": ostype,
+        "scsihw": scsihw,
+        "balloon": balloon,
+        "ide2": f"{iso},media=cdrom",
+        "scsi0": f"{storage}:{disk_gb},iothread=1",
+        "net0": net0,
+        "boot": "order=scsi0;ide2;net0",
+        "start": 1 if start_after_create else 0,
+        "numa": 0,
+    }
+    if name is not None:
+        data["name"] = name
+
+    task_id = await _client.post(f"/nodes/{node}/qemu", data=data)
+
+    return VmCreateResult(vmid=vmid, node=node, task_id=task_id)
 
 
 async def get_next_vmid() -> int | dict:
