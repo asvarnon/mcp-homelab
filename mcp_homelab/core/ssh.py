@@ -15,10 +15,10 @@ import paramiko
 
 from pathlib import Path
 
-from core.config import get_ssh_key_path, get_ssh_user, load_config
+from mcp_homelab.core.config import get_ssh_key_path, get_ssh_user, load_config
 
 if TYPE_CHECKING:
-    from core.config import AppConfig
+    from mcp_homelab.core.config import AppConfig
 
 logger = logging.getLogger(__name__)
 

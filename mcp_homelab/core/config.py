@@ -14,7 +14,7 @@ import warnings
 
 from ruamel.yaml import YAML
 from dotenv import load_dotenv
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
 
 
 class HostConfig(BaseModel):
@@ -49,15 +49,27 @@ class OPNsenseConfig(BaseModel):
     verify_ssl: bool = False
 
 
+class ServerConfig(BaseModel):
+    transport: Literal["stdio", "http"] = "stdio"
+    host: str = "127.0.0.1"
+    port: int = 8000
+    public_url: AnyHttpUrl | None = None
+
+
 class AppConfig(BaseModel):
     hosts: dict[str, HostConfig] = Field(default_factory=dict)
     proxmox: ProxmoxConfig | None = None
     opnsense: OPNsenseConfig | None = None
+    server: ServerConfig = Field(default_factory=ServerConfig)
 
     @model_validator(mode="before")
     @classmethod
     def _accept_legacy_nodes_key(cls, data: dict) -> dict:  # type: ignore[override]
-        """Accept 'nodes' as a deprecated alias for 'hosts'."""
+        """Accept 'nodes' as a deprecated alias for 'hosts'.
+
+        Also coerces ``hosts: null`` (common in YAML when key has only
+        commented-out entries) to an empty dict so Pydantic doesn't reject it.
+        """
         if isinstance(data, dict) and "nodes" in data and "hosts" not in data:
             warnings.warn(
                 "Config key 'nodes' is deprecated — rename it to 'hosts' in config.yaml.",
@@ -65,6 +77,8 @@ class AppConfig(BaseModel):
                 stacklevel=2,
             )
             data["hosts"] = data.pop("nodes")
+        if isinstance(data, dict) and data.get("hosts") is None:
+            data["hosts"] = {}
         return data
 
 
@@ -108,6 +122,9 @@ def load_env() -> None:
     load_dotenv(get_config_dir() / ".env")
 
 
+_WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})
+
+
 def validate_env() -> None:
     """Check that required environment variables are set.
 
@@ -132,6 +149,14 @@ def validate_env() -> None:
         for var in ("OPNSENSE_API_KEY", "OPNSENSE_API_SECRET"):
             if not os.environ.get(var):
                 missing.append(var)
+
+    if config.server.transport == "http":
+        if config.server.host in _WILDCARD_HOSTS and config.server.public_url is None:
+            raise EnvironmentError(
+                "server.host is '0.0.0.0' (all interfaces) but server.public_url is not set. "
+                "The MCP SDK requires a valid public URL for Host header validation. "
+                "Set server.public_url to the URL clients will use (e.g., 'http://203.0.113.111:8000')."
+            )
 
     if missing:
         raise EnvironmentError(

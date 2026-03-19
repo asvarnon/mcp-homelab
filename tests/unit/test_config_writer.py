@@ -54,76 +54,76 @@ class TestLoadYaml:
 class TestUpsertNode:
     def test_creates_hosts_section_if_missing(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.yaml"
-        config_path.write_text("proxmox:\n  host: 10.0.0.1\n", encoding="utf-8")
+        config_path.write_text("proxmox:\n  host: 198.51.100.1\n", encoding="utf-8")
 
-        upsert_node(config_path, "gamehost", {
-            "hostname": "gamehost",
-            "ip": "10.0.50.10",
+        upsert_node(config_path, "test-node-1", {
+            "hostname": "test-node-1",
+            "ip": "192.0.2.10",
             "ssh": True,
         })
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert "gamehost" in data["hosts"]
-        assert data["hosts"]["gamehost"]["ip"] == "10.0.50.10"
+        assert "test-node-1" in data["hosts"]
+        assert data["hosts"]["test-node-1"]["ip"] == "192.0.2.10"
 
     def test_adds_node_to_existing(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            "nodes:\n  pve:\n    hostname: pve\n    ip: 10.0.50.20\n"
-            "proxmox:\n  host: 10.0.50.20\nopnsense:\n  host: 10.0.50.1\n",
+            "nodes:\n  test-node-2:\n    hostname: test-node-2\n    ip: 192.0.2.20\n"
+            "proxmox:\n  host: 192.0.2.20\nopnsense:\n  host: 192.0.2.1\n",
             encoding="utf-8",
         )
 
-        upsert_node(config_path, "gamehost", {
-            "hostname": "gamehost",
-            "ip": "10.0.50.10",
+        upsert_node(config_path, "test-node-1", {
+            "hostname": "test-node-1",
+            "ip": "192.0.2.10",
         })
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert "pve" in data["nodes"]
-        assert "gamehost" in data["nodes"]
+        assert "test-node-2" in data["nodes"]
+        assert "test-node-1" in data["nodes"]
 
     def test_preserves_existing_sections(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            "nodes:\n  pve:\n    hostname: pve\n    ip: 10.0.50.20\n\n"
-            "proxmox:\n  host: 10.0.50.20\n\n"
-            "opnsense:\n  host: 10.0.50.1\n",
+            "nodes:\n  test-node-2:\n    hostname: test-node-2\n    ip: 192.0.2.20\n\n"
+            "proxmox:\n  host: 192.0.2.20\n\n"
+            "opnsense:\n  host: 192.0.2.1\n",
             encoding="utf-8",
         )
 
-        upsert_node(config_path, "gamehost", {
-            "hostname": "gamehost",
-            "ip": "10.0.50.10",
+        upsert_node(config_path, "test-node-1", {
+            "hostname": "test-node-1",
+            "ip": "192.0.2.10",
         })
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert data["proxmox"]["host"] == "10.0.50.20"
-        assert data["opnsense"]["host"] == "10.0.50.1"
+        assert data["proxmox"]["host"] == "192.0.2.20"
+        assert data["opnsense"]["host"] == "192.0.2.1"
 
     def test_updates_existing_node(self, tmp_path: Path) -> None:
         config_path = tmp_path / "config.yaml"
         config_path.write_text(
-            "nodes:\n  pve:\n    hostname: pve\n    ip: 10.0.50.20\n"
+            "nodes:\n  test-node-2:\n    hostname: test-node-2\n    ip: 192.0.2.20\n"
             "proxmox:\n  host: x\nopnsense:\n  host: y\n",
             encoding="utf-8",
         )
 
-        upsert_node(config_path, "pve", {
-            "hostname": "pve",
-            "ip": "10.0.50.99",  # changed
+        upsert_node(config_path, "test-node-2", {
+            "hostname": "test-node-2",
+            "ip": "192.0.2.99",  # changed
         })
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert data["nodes"]["pve"]["ip"] == "10.0.50.99"
+        assert data["nodes"]["test-node-2"]["ip"] == "192.0.2.99"
 
 
 # ===========================================================================
@@ -136,12 +136,12 @@ class TestUpsertProxmox:
         config_path = tmp_path / "config.yaml"
         config_path.write_text("nodes: {}\nopnsense:\n  host: x\n", encoding="utf-8")
 
-        upsert_proxmox(config_path, "10.0.50.20", port=8006, verify_ssl=False)
+        upsert_proxmox(config_path, "192.0.2.20", port=8006, verify_ssl=False)
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert data["proxmox"]["host"] == "10.0.50.20"
+        assert data["proxmox"]["host"] == "192.0.2.20"
         assert data["proxmox"]["port"] == 8006
 
 
@@ -150,12 +150,12 @@ class TestUpsertOpnsense:
         config_path = tmp_path / "config.yaml"
         config_path.write_text("nodes: {}\nproxmox:\n  host: x\n", encoding="utf-8")
 
-        upsert_opnsense(config_path, "10.0.50.1")
+        upsert_opnsense(config_path, "192.0.2.1")
 
         yaml = YAML()
         with open(config_path) as f:
             data = yaml.load(f)
-        assert data["opnsense"]["host"] == "10.0.50.1"
+        assert data["opnsense"]["host"] == "192.0.2.1"
         assert data["opnsense"]["verify_ssl"] is False
 
 

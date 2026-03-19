@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from tools.context_gen import generate_context, list_context_files, _migrate_legacy_layout
+from mcp_homelab.tools.context_gen import generate_context, list_context_files, _migrate_legacy_layout
 
 
 # ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ MINIMAL_SCAN: dict[str, Any] = {
         {
             "name": "testhost",
             "hostname": "testhost",
-            "ip": "10.0.0.1",
+            "ip": "198.51.100.1",
             "vlan": 10,
             "ssh_enabled": True,
             "docker_enabled": False,
@@ -157,7 +157,7 @@ class TestLegacyMigration:
 
         nodes_dir = tmp_path / "nodes"
         nodes_dir.mkdir()
-        (nodes_dir / "gamehost.md").write_text("stale node")
+        (nodes_dir / "test-node-1.md").write_text("stale node")
 
         archived_dir = tmp_path / "archived"
         archived_dir.mkdir()

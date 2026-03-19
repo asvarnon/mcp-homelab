@@ -30,7 +30,10 @@ mcp-homelab = "mcp_homelab.cli:main"
 Repository = "https://github.com/asvarnon/mcp-homelab"
 
 [tool.setuptools.packages.find]
-include = ["core*", "tools*", "mcp_homelab*"]
+include = ["mcp_homelab", "mcp_homelab.*"]
+
+[tool.setuptools.package-data]
+mcp_homelab = ["data/*.service"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

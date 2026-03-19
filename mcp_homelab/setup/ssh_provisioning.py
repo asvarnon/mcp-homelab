@@ -25,7 +25,7 @@ import paramiko
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from core.config import HostConfig
+from mcp_homelab.core.config import HostConfig
 from mcp_homelab.setup.config_writer import upsert_node
 from mcp_homelab.setup.roles import RoleTemplate, get_role
 from mcp_homelab.setup.ssh_helpers import (
@@ -350,7 +350,7 @@ def run_ssh_provisioning(
     key_path = effective_key_dir / hostname
 
     # Load host config for IP and OS
-    from core.config import load_config
+    from mcp_homelab.core.config import load_config
 
     config = load_config()
     if hostname not in config.hosts:
@@ -442,7 +442,7 @@ def _update_config(
     key_path: Path,
 ) -> None:
     """Update config.yaml with the new service account credentials."""
-    from core.config import get_config_dir
+    from mcp_homelab.core.config import get_config_dir
 
     config_path = get_config_dir() / "config.yaml"
 

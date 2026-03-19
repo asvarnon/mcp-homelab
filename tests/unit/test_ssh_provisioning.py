@@ -280,7 +280,7 @@ class TestVerifyConnection:
         mock_connect.return_value = mock_client
         mock_run.return_value = CommandResult(0, "ok", "")
 
-        result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
+        result = verify_connection("198.51.100.1", "svc", Path("/tmp/key"))
 
         assert result is True
         mock_client.close.assert_called_once()
@@ -291,7 +291,7 @@ class TestVerifyConnection:
 
         mock_connect.side_effect = SSHConnectError("timeout")
 
-        result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
+        result = verify_connection("198.51.100.1", "svc", Path("/tmp/key"))
 
         assert result is False
 
@@ -302,7 +302,7 @@ class TestVerifyConnection:
         mock_connect.return_value = mock_client
         mock_run.return_value = CommandResult(1, "", "error")
 
-        result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
+        result = verify_connection("198.51.100.1", "svc", Path("/tmp/key"))
 
         assert result is False
         mock_client.close.assert_called_once()
@@ -316,7 +316,7 @@ class TestVerifyConnection:
         mock_connect.return_value = mock_client
         mock_run.side_effect = RuntimeError("SSH timeout")
 
-        result = verify_connection("10.0.0.1", "svc", Path("/tmp/key"))
+        result = verify_connection("198.51.100.1", "svc", Path("/tmp/key"))
 
         assert result is False
         mock_client.close.assert_called_once()

@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 import pytest
 
-from core.config import (
+from mcp_homelab.core.config import (
     AppConfig,
     HostConfig,
     OPNsenseConfig,
@@ -35,7 +35,7 @@ from core.config import (
 
 class TestHostConfig:
     def test_minimal(self) -> None:
-        host = HostConfig(hostname="test", ip="10.0.0.1")
+        host = HostConfig(hostname="test", ip="198.51.100.1")
         assert host.ssh is False
         assert host.sudo_docker is False
         assert host.vlan is None
@@ -46,12 +46,12 @@ class TestHostConfig:
     def test_rejects_invalid_os(self) -> None:
         from pydantic import ValidationError
         with pytest.raises(ValidationError, match="'linux'.*'freebsd'"):
-            HostConfig(hostname="test", ip="10.0.0.1", os="windows")  # type: ignore[arg-type]
+            HostConfig(hostname="test", ip="198.51.100.1", os="windows")  # type: ignore[arg-type]
 
     def test_full(self) -> None:
         host = HostConfig(
-            hostname="gamehost",
-            ip="10.0.50.10",
+            hostname="test-node-1",
+            ip="192.0.2.10",
             vlan=50,
             ssh=True,
             ssh_user="admin",
@@ -71,25 +71,25 @@ class TestHostConfig:
 
 class TestAppConfig:
     def test_valid_config(self, sample_config: AppConfig) -> None:
-        assert "gamehost" in sample_config.hosts
+        assert "test-node-1" in sample_config.hosts
         assert sample_config.proxmox is not None
-        assert sample_config.proxmox.host == "10.0.50.20"
+        assert sample_config.proxmox.host == "192.0.2.20"
         assert sample_config.opnsense is not None
-        assert sample_config.opnsense.host == "10.0.50.1"
+        assert sample_config.opnsense.host == "192.0.2.1"
 
     def test_proxmox_defaults(self) -> None:
-        pve = ProxmoxConfig(host="10.0.0.1")
+        pve = ProxmoxConfig(host="198.51.100.1")
         assert pve.port == 8006
         assert pve.verify_ssl is False
 
     def test_opnsense_defaults(self) -> None:
-        opn = OPNsenseConfig(host="10.0.0.1")
+        opn = OPNsenseConfig(host="198.51.100.1")
         assert opn.verify_ssl is False
 
     def test_ssh_only_config(self) -> None:
         """Proxmox and OPNsense sections are optional."""
         config = AppConfig(
-            hosts={"box": HostConfig(hostname="box", ip="10.0.0.1")},
+            hosts={"box": HostConfig(hostname="box", ip="198.51.100.1")},
         )
         assert config.proxmox is None
         assert config.opnsense is None
@@ -101,10 +101,15 @@ class TestAppConfig:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             config = AppConfig.model_validate({
-                "nodes": {"box": {"hostname": "box", "ip": "10.0.0.1"}},
+                "nodes": {"box": {"hostname": "box", "ip": "198.51.100.1"}},
             })
         assert "box" in config.hosts
         assert any("deprecated" in str(warning.message).lower() for warning in w)
+
+    def test_null_hosts_coerced_to_empty_dict(self) -> None:
+        """YAML 'hosts:' with no value parses as None — model should accept it."""
+        config = AppConfig.model_validate({"hosts": None})
+        assert config.hosts == {}
 
 
 # ===========================================================================
@@ -162,13 +167,13 @@ class TestLoadConfig:
     def test_loads_from_file(self, tmp_config_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_config_dir))
         config = load_config()
-        assert "gamehost" in config.hosts
+        assert "test-node-1" in config.hosts
         assert config.proxmox is not None
-        assert config.proxmox.host == "10.0.50.20"
+        assert config.proxmox.host == "192.0.2.20"
 
     def test_explicit_path(self, tmp_config_dir: Path) -> None:
         config = load_config(tmp_config_dir / "config.yaml")
-        assert "gamehost" in config.hosts
+        assert "test-node-1" in config.hosts
 
     def test_missing_file_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
@@ -251,8 +256,8 @@ class TestValidateEnv:
         from ruamel.yaml import YAML
 
         config_data = {
-            "hosts": {"pve": {"hostname": "pve", "ip": "10.0.0.1"}},
-            "proxmox": {"host": "10.0.0.1", "port": 8006, "verify_ssl": False},
+            "hosts": {"test-node-2": {"hostname": "test-node-2", "ip": "198.51.100.1"}},
+            "proxmox": {"host": "198.51.100.1", "port": 8006, "verify_ssl": False},
         }
         yaml = YAML()
         config_path = tmp_path / "config.yaml"
@@ -288,7 +293,7 @@ class TestConfiguredHelpers:
         yaml = YAML()
         config_path = tmp_path / "config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "10.0.0.1"}}}, f)
+            yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}}}, f)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
         assert proxmox_configured() is False
 
@@ -306,6 +311,6 @@ class TestConfiguredHelpers:
         yaml = YAML()
         config_path = tmp_path / "config.yaml"
         with open(config_path, "w", encoding="utf-8") as f:
-            yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "10.0.0.1"}}}, f)
+            yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}}}, f)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
         assert opnsense_configured() is False

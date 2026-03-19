@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pydantic import BaseModel
 
-from core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
+from mcp_homelab.core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
 
 
 # ---------------------------------------------------------------------------
@@ -25,8 +25,8 @@ from core.config import AppConfig, HostConfig, OPNsenseConfig, ProxmoxConfig
 # ---------------------------------------------------------------------------
 
 SAMPLE_NODE_CONFIG: dict[str, Any] = {
-    "hostname": "gamehost",
-    "ip": "10.0.50.10",
+    "hostname": "test-node-1",
+    "ip": "192.0.2.10",
     "vlan": 50,
     "ssh": True,
     "ssh_user": "admin",
@@ -37,10 +37,10 @@ SAMPLE_NODE_CONFIG: dict[str, Any] = {
 
 SAMPLE_CONFIG_DICT: dict[str, Any] = {
     "hosts": {
-        "gamehost": SAMPLE_NODE_CONFIG,
-        "pve": {
-            "hostname": "pve",
-            "ip": "10.0.50.20",
+        "test-node-1": SAMPLE_NODE_CONFIG,
+        "test-node-2": {
+            "hostname": "test-node-2",
+            "ip": "192.0.2.20",
             "vlan": 50,
             "ssh": True,
             "ssh_user": "root",
@@ -49,8 +49,8 @@ SAMPLE_CONFIG_DICT: dict[str, Any] = {
             "description": "Proxmox hypervisor",
         },
     },
-    "proxmox": {"host": "10.0.50.20", "port": 8006, "verify_ssl": False},
-    "opnsense": {"host": "10.0.50.1", "verify_ssl": False},
+    "proxmox": {"host": "192.0.2.20", "port": 8006, "verify_ssl": False},
+    "opnsense": {"host": "192.0.2.1", "verify_ssl": False},
 }
 
 SAMPLE_ENV_VARS: dict[str, str] = {

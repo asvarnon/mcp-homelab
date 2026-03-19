@@ -53,13 +53,30 @@ All tests should pass before submitting a PR. If something's failing on `master`
 
 ---
 
+## Branch Model
+
+```
+master          ← stable releases only (tagged versions, published to PyPI)
+  └─ develop    ← integration staging (features tested here before release)
+       ├─ feature/xxx
+       └─ fix/xxx
+```
+
+| Branch | Purpose | Merges into |
+|---|---|---|
+| `master` | Production releases. Every commit is a tested, versioned release. | — |
+| `develop` | Integration staging. Features land here first for validation. | `master` (via PR) |
+| `feature/*` | New features and enhancements. | `develop` (via PR) |
+| `fix/*` | Bug fixes. Hotfixes for production branch from `master`. | `develop` or `master` |
+
 ## Pull Request Process
 
-1. **Branch from `master`** — use `feature/<name>` or `fix/<name>`.
-2. **One logical change per PR.** Keep things focused — it makes review faster for everyone.
-3. **Include tests** for any behavioral change. New tools need unit tests. Bug fixes need a regression test.
-4. **All tests should pass** (`pytest tests/ -q` — all green).
-5. **Explain what and why** in the PR description — not just what changed, but why this approach was chosen.
+1. **Branch from `develop`** — use `feature/<name>` or `fix/<name>`.
+2. **PR into `develop`** for integration testing. Only validated changes get promoted to `master`.
+3. **One logical change per PR.** Keep things focused — it makes review faster for everyone.
+4. **Include tests** for any behavioral change. New tools need unit tests. Bug fixes need a regression test.
+5. **All tests should pass** (`pytest tests/ -q` — all green).
+6. **Explain what and why** in the PR description — not just what changed, but why this approach was chosen.
 
 ---
 
