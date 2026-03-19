@@ -65,7 +65,11 @@ class AppConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _accept_legacy_nodes_key(cls, data: dict) -> dict:  # type: ignore[override]
-        """Accept 'nodes' as a deprecated alias for 'hosts'."""
+        """Accept 'nodes' as a deprecated alias for 'hosts'.
+
+        Also coerces ``hosts: null`` (common in YAML when key has only
+        commented-out entries) to an empty dict so Pydantic doesn't reject it.
+        """
         if isinstance(data, dict) and "nodes" in data and "hosts" not in data:
             warnings.warn(
                 "Config key 'nodes' is deprecated — rename it to 'hosts' in config.yaml.",
@@ -73,6 +77,8 @@ class AppConfig(BaseModel):
                 stacklevel=2,
             )
             data["hosts"] = data.pop("nodes")
+        if isinstance(data, dict) and data.get("hosts") is None:
+            data["hosts"] = {}
         return data
 
 

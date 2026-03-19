@@ -106,6 +106,11 @@ class TestAppConfig:
         assert "box" in config.hosts
         assert any("deprecated" in str(warning.message).lower() for warning in w)
 
+    def test_null_hosts_coerced_to_empty_dict(self) -> None:
+        """YAML 'hosts:' with no value parses as None — model should accept it."""
+        config = AppConfig.model_validate({"hosts": None})
+        assert config.hosts == {}
+
 
 # ===========================================================================
 # bootstrap_config_dir
