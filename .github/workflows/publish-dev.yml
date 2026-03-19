@@ -1,0 +1,51 @@
+name: Publish Dev Release
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+  id-token: write  # Required for trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi-dev
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0  # Need full history for commit count
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+
+      - name: Install build tools
+        run: pip install build
+
+      - name: Set dev version
+        run: |
+          # Read base version from pyproject.toml
+          BASE_VERSION=$(python -c "
+          import re
+          with open('pyproject.toml') as f:
+              match = re.search(r'version\s*=\s*\"([^\"]+)\"', f.read())
+              # Strip any existing pre-release suffix (a1, b1, rc1, .dev1)
+              version = re.sub(r'(a|b|rc|\.dev)\d+$', '', match.group(1))
+              print(version)
+          ")
+          # Commit count gives monotonically increasing dev number
+          DEV_NUM=$(git rev-list --count HEAD)
+          DEV_VERSION="${BASE_VERSION}.dev${DEV_NUM}"
+          echo "Publishing version: ${DEV_VERSION}"
+          # Patch pyproject.toml in-place (build artifact only, not committed)
+          sed -i "s/^version = \".*\"/version = \"${DEV_VERSION}\"/" pyproject.toml
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # v1.13.0
