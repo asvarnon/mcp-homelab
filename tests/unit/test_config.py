@@ -369,6 +369,29 @@ class TestWarnFilePermissions:
 
         assert not any(".env" in r.message for r in caplog.records)
 
+    def test_ignores_owner_execute_bit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Owner-only bits like execute don't indicate exposure to others."""
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100700})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
     def test_skipped_on_windows(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     ) -> None:

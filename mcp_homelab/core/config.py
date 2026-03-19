@@ -124,12 +124,15 @@ _IS_POSIX = os.name != "nt"
 def _warn_file_permissions(path: Path, max_mode: int, label: str) -> None:
     """Log a warning if *path* has permissions more open than *max_mode*.
 
+    Only group/other bits are checked — owner-only bits (e.g. execute)
+    are ignored since they don't affect exposure to other users.
     Skipped on Windows where POSIX permission bits don't apply.
     """
     if not _IS_POSIX or not path.is_file():
         return
     mode = stat.S_IMODE(os.stat(path).st_mode)
-    if mode & ~max_mode:
+    exposure = mode & (stat.S_IRWXG | stat.S_IRWXO)
+    if exposure & ~max_mode:
         logger.warning(
             "%s (%s) has mode %04o — expected %04o or stricter. "
             "Run: chmod %04o %s",

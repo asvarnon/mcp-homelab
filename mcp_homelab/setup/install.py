@@ -218,10 +218,24 @@ def run_install(public_url: str | None = None) -> None:
     _run_command(["chown", "-R", "mcp:mcp", str(install_path)], "set ownership")
     env_file = install_path / ".env"
     if env_file.exists():
-        os.chmod(env_file, 0o600)
+        try:
+            os.chmod(env_file, 0o600)
+        except OSError as exc:
+            print(
+                f"  ✗ failed to set permissions 0600 on {env_file}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     config_file = install_path / "config.yaml"
     if config_file.exists():
-        os.chmod(config_file, 0o640)
+        try:
+            os.chmod(config_file, 0o640)
+        except OSError as exc:
+            print(
+                f"  ✗ failed to set permissions 0640 on {config_file}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     print("  → ownership and permissions set ✓")
 
     print("[6/10] Resolving public URL...")
