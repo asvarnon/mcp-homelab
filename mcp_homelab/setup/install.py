@@ -81,6 +81,54 @@ def _run_command(command: list[str], step_name: str) -> subprocess.CompletedProc
     return result
 
 
+# Systemd sandbox directives that require mount namespaces.
+# These fail inside unprivileged LXC containers (status 226/NAMESPACE).
+# LockPersonality and NoNewPrivileges use prctl(), not namespaces — kept.
+# ReadWritePaths is a no-op without ProtectSystem, but stripped for clarity.
+_NAMESPACE_DIRECTIVES: set[str] = {
+    "PrivateTmp",
+    "PrivateDevices",
+    "ProtectSystem",
+    "ProtectHome",
+    "ProtectKernelTunables",
+    "ProtectKernelModules",
+    "ProtectControlGroups",
+    "ReadWritePaths",
+}
+
+
+def _detect_container() -> str | None:
+    """Return the container runtime name (e.g. 'lxc', 'docker') or None.
+
+    Returns None (assume bare metal) if the detection binary is missing
+    or times out, so install continues with full sandbox directives.
+    """
+    try:
+        result = subprocess.run(
+            ["systemd-detect-virt", "--container"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    virt = result.stdout.strip() if result.returncode == 0 else None
+    # systemd-detect-virt returns "none" when not in a container
+    if virt == "none":
+        return None
+    return virt
+
+
+def _strip_namespace_directives(unit_content: str) -> str:
+    """Remove systemd directives that need mount namespaces."""
+    lines = unit_content.splitlines(keepends=True)
+    return "".join(
+        line for line in lines
+        if line.split("=", 1)[0].strip() not in _NAMESPACE_DIRECTIVES
+    )
+
+
 def _resolve_public_url(public_url: str | None) -> str:
     """Get public HTTPS URL from argument or interactive prompt."""
     if public_url is not None and public_url.strip():
@@ -116,12 +164,19 @@ def _update_server_config(config_path: Path, public_url: str) -> None:
         yaml.dump(data, file)
 
 
-def _write_systemd_unit(install_path: Path, output_path: Path) -> None:
+def _write_systemd_unit(
+    install_path: Path,
+    output_path: Path,
+    *,
+    in_container: bool = False,
+) -> None:
     """Load the bundled service template, render it, and write to output_path."""
     _validate_path_safe(install_path)
     service_ref = importlib.resources.files("mcp_homelab.data").joinpath("mcp-homelab.service")
     template = service_ref.read_text(encoding="utf-8")
     rendered = template.replace("/opt/mcp-homelab", str(install_path))
+    if in_container:
+        rendered = _strip_namespace_directives(rendered)
     output_path.write_text(rendered, encoding="utf-8")
 
 
@@ -176,9 +231,13 @@ def run_install(public_url: str | None = None) -> None:
     print("  → config.yaml updated (HTTP mode) ✓")
 
     print("[8/10] Installing systemd unit...")
+    container_type = _detect_container()
     service_path = Path("/etc/systemd/system/mcp-homelab.service")
-    _write_systemd_unit(install_path, service_path)
-    print(f"  → wrote {service_path} ✓")
+    _write_systemd_unit(install_path, service_path, in_container=container_type is not None)
+    if container_type:
+        print(f"  ⚠ wrote {service_path} (sandbox directives stripped — {container_type} container detected)")
+    else:
+        print(f"  → wrote {service_path} ✓")
 
     print("[9/10] Enabling and starting service...")
     _run_command(["systemctl", "daemon-reload"], "systemd daemon reload")

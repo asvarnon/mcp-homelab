@@ -10,9 +10,11 @@ import pytest
 from ruamel.yaml import YAML
 
 from mcp_homelab.setup.install import (
+    _detect_container,
     _ensure_linux,
     _resolve_public_url,
     _run_command,
+    _strip_namespace_directives,
     _update_server_config,
     _write_systemd_unit,
     run_install,
@@ -74,8 +76,8 @@ class TestRunInstall:
         monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
         monkeypatch.setattr("mcp_homelab.setup.install.os.geteuid", lambda: 0, raising=False)
         monkeypatch.setattr("mcp_homelab.setup.install._detect_install_path", lambda: install_path)
-        # Stub out the service template write (writes to /etc/systemd which needs root)
-        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *args: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *a, **kw: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_container", lambda: None)
         monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
 
         run_install(public_url="https://mcp.example.com")
@@ -105,7 +107,8 @@ class TestRunInstall:
         monkeypatch.setattr("mcp_homelab.setup.install.platform.system", lambda: "Linux")
         monkeypatch.setattr("mcp_homelab.setup.install.os.geteuid", lambda: 0, raising=False)
         monkeypatch.setattr("mcp_homelab.setup.install._detect_install_path", lambda: install_path)
-        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *args: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._write_systemd_unit", lambda *a, **kw: None)
+        monkeypatch.setattr("mcp_homelab.setup.install._detect_container", lambda: None)
         monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
 
         run_install(public_url="https://mcp.example.com")
@@ -166,6 +169,126 @@ class TestRunInstall:
         resolved = _resolve_public_url(None)
 
         assert resolved == "https://prompted.example.com"
+
+
+class TestDetectContainer:
+    def test_returns_lxc(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, "lxc\n", ""),
+        )
+        assert _detect_container() == "lxc"
+
+    def test_returns_docker(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, "docker\n", ""),
+        )
+        assert _detect_container() == "docker"
+
+    def test_returns_none_on_bare_metal(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(a[0], 0, "none\n", ""),
+        )
+        assert _detect_container() is None
+
+    def test_returns_none_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.subprocess.run",
+            lambda *a, **kw: subprocess.CompletedProcess(a[0], 1, "", ""),
+        )
+        assert _detect_container() is None
+
+    def test_returns_none_on_missing_binary(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def raise_fnf(*args: object, **kwargs: object) -> None:
+            raise FileNotFoundError("systemd-detect-virt")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", raise_fnf)
+        assert _detect_container() is None
+
+    def test_returns_none_on_timeout(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def raise_timeout(*args: object, **kwargs: object) -> None:
+            raise subprocess.TimeoutExpired("systemd-detect-virt", 5)
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", raise_timeout)
+        assert _detect_container() is None
+
+
+class TestStripNamespaceDirectives:
+    def test_strips_sandbox_lines(self) -> None:
+        unit = (
+            "[Service]\n"
+            "User=mcp\n"
+            "NoNewPrivileges=true\n"
+            "LockPersonality=true\n"
+            "PrivateTmp=true\n"
+            "ProtectSystem=strict\n"
+            "ProtectHome=true\n"
+            "ReadWritePaths=/opt/mcp-homelab\n"
+            "\n"
+            "[Install]\n"
+        )
+        result = _strip_namespace_directives(unit)
+        assert "PrivateTmp" not in result
+        assert "ProtectSystem" not in result
+        assert "ProtectHome" not in result
+        assert "ReadWritePaths" not in result
+        # NoNewPrivileges and LockPersonality use prctl(), not namespaces
+        assert "NoNewPrivileges=true" in result
+        assert "LockPersonality=true" in result
+        assert "User=mcp" in result
+        assert "[Install]" in result
+
+    def test_preserves_unit_without_sandbox(self) -> None:
+        unit = "[Service]\nUser=mcp\nExecStart=/bin/true\n"
+        assert _strip_namespace_directives(unit) == unit
+
+
+class TestWriteSystemdUnitContainer:
+    def test_strips_directives_when_in_container(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        output_path = tmp_path / "mcp-homelab.service"
+
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
+            "[Service]\n"
+            "WorkingDirectory=/opt/mcp-homelab\n"
+            "PrivateTmp=true\n"
+            "ProtectSystem=strict\n"
+            "NoNewPrivileges=true\n"
+        )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
+
+        _write_systemd_unit(install_path, output_path, in_container=True)
+
+        rendered = output_path.read_text(encoding="utf-8")
+        assert "PrivateTmp" not in rendered
+        assert "ProtectSystem" not in rendered
+        assert "NoNewPrivileges=true" in rendered
+
+    def test_keeps_directives_on_bare_metal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        output_path = tmp_path / "mcp-homelab.service"
+
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
+            "[Service]\n"
+            "WorkingDirectory=/opt/mcp-homelab\n"
+            "PrivateTmp=true\n"
+            "ProtectSystem=strict\n"
+        )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
+
+        _write_systemd_unit(install_path, output_path, in_container=False)
+
+        rendered = output_path.read_text(encoding="utf-8")
+        assert "PrivateTmp=true" in rendered
+        assert "ProtectSystem=strict" in rendered
 
 
 def _seed_install_tree(base_path: Path) -> Path:
