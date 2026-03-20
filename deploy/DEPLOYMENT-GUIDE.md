@@ -466,23 +466,43 @@ chown mcp:mcp /opt/mcp-homelab/.env
 
 ### 4.5 Lock down OAuth client registration (recommended)
 
-By default, the server auto-approves all OAuth Dynamic Client Registration requests. To restrict access to a single pre-registered client, generate credentials and add them to `.env`:
+Dynamic Client Registration (DCR) is always enabled — this is required for Claude.ai and Claude Desktop to connect. To control **which** clients can register, restrict the allowed redirect URI origins.
+
+#### Redirect URI allowlisting
+
+Add `MCP_ALLOWED_REDIRECT_ORIGINS` to `.env` with a comma-separated list of trusted origins:
+
+```bash
+cat >> /opt/mcp-homelab/.env << 'EOF'
+# Allow Claude.ai and local Claude Desktop connections
+MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost
+EOF
+```
+
+When set, any DCR request whose redirect URIs don't match an allowed origin is rejected. Localhost origins are port-flexible — `http://localhost` accepts any port (e.g., `http://localhost:3000`), which is needed because Claude Desktop uses dynamic ports.
+
+If you also want to allow connections from `127.0.0.1` or IPv6 loopback, add them explicitly:
+
+```bash
+MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost,http://127.0.0.1,http://[::1]
+```
+
+> **Warning:** If `MCP_ALLOWED_REDIRECT_ORIGINS` is not set, the server logs a warning and accepts registrations with **any** redirect URI. This is suitable for trusted LANs only.
+
+#### Optional: Pre-registered static client
+
+You can optionally pre-register a known client by setting both `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` in `.env`. This client is always available regardless of the allowlist. Most users don't need this — Claude.ai and Claude Desktop use DCR automatically.
 
 ```bash
 # Generate credentials (both must be ≥32 characters)
 python3 -c "import secrets; print(secrets.token_urlsafe(48))"
 
 # Run twice — once for client ID, once for client secret
-# Append to .env on the server
 cat >> /opt/mcp-homelab/.env << 'EOF'
 MCP_CLIENT_ID=<generated-client-id>
 MCP_CLIENT_SECRET=<generated-client-secret>
 EOF
 ```
-
-When both are set, DCR is disabled — only the pre-registered client can authenticate. Enter these values in Claude Desktop's OAuth prompt or store them in your client configuration.
-
-If neither is set, the server falls back to open DCR (backward compatible, suitable for trusted LANs only).
 
 ### 4.6 Start the service
 
@@ -504,7 +524,7 @@ journalctl -u mcp-homelab -n 20   # check for errors
 1. Go to [Claude.ai Settings → Integrations](https://claude.ai/settings/integrations) (or Claude mobile → Settings → Integrations)
 2. Click **Add Integration** → **Custom MCP Server**
 3. Enter your public URL (e.g., `https://mcp.example.com`)
-4. Claude will perform the OAuth 2.1 flow automatically. If `MCP_CLIENT_ID` / `MCP_CLIENT_SECRET` are set, enter those credentials when prompted. Otherwise, Claude uses Dynamic Client Registration.
+4. Claude will perform the OAuth 2.1 flow automatically via Dynamic Client Registration — no credentials to enter.
 5. You should see all tools listed (scan_infrastructure, list_nodes, get_node_status, etc.)
 
 ### Run validation checks

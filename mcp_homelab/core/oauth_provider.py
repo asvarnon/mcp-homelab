@@ -99,6 +99,7 @@ class HomelabOAuthProvider:
         self,
         client_id: str | None = None,
         client_secret: str | None = None,
+        allowed_redirect_origins: list[str] | None = None,
     ) -> None:
         self._clients: dict[str, OAuthClientInformationFull] = {}
         self._auth_codes: dict[str, AuthorizationCode] = {}
@@ -107,8 +108,18 @@ class HomelabOAuthProvider:
         # Map access token → refresh token for paired revocation.
         self._token_pairs: dict[str, str] = {}
 
+        self._allowed_redirect_origins = allowed_redirect_origins or None
+
         if client_id and client_secret:
             self._register_static_client(client_id, client_secret)
+
+        if not self._allowed_redirect_origins:
+            logger.warning(
+                "MCP_ALLOWED_REDIRECT_ORIGINS is not set — Dynamic Client Registration "
+                "will accept any redirect URI. Anyone who can reach /register can obtain "
+                "OAuth tokens. Set this var to restrict DCR to trusted origins, e.g.: "
+                "MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost",
+            )
 
     def _register_static_client(
         self, client_id: str, client_secret: str,
@@ -153,6 +164,8 @@ class HomelabOAuthProvider:
                 error="invalid_client_metadata",
                 error_description="client_id is required",
             )
+        if self._allowed_redirect_origins is not None:
+            self._validate_redirect_uris(client_info.redirect_uris or [])
         self._clients[client_info.client_id] = client_info
         logger.info(
             "Registered OAuth client: %s (%s)",
@@ -367,3 +380,46 @@ class HomelabOAuthProvider:
         ]
         for code in expired:
             del self._auth_codes[code]
+
+    def _validate_redirect_uris(self, redirect_uris: list[AnyUrl]) -> None:
+        """Raise RegistrationError if any redirect URI origin is not allowlisted."""
+        allowed_redirect_origins = self._allowed_redirect_origins
+        if allowed_redirect_origins is None:
+            return
+
+        for uri in redirect_uris:
+            if not any(
+                self._uri_matches_origin(str(uri), origin)
+                for origin in allowed_redirect_origins
+            ):
+                raise RegistrationError(
+                    error="invalid_redirect_uri",
+                    error_description=(
+                        f"Redirect URI {uri!r} does not match any allowed origin. "
+                        f"Allowed: {', '.join(allowed_redirect_origins)}"
+                    ),
+                )
+
+    @staticmethod
+    def _uri_matches_origin(redirect_uri: str, origin: str) -> bool:
+        """Return True if redirect_uri origin matches the configured origin."""
+        parsed_uri = urlparse(redirect_uri)
+        parsed_origin = urlparse(origin)
+
+        if parsed_uri.scheme != parsed_origin.scheme:
+            return False
+
+        uri_host = parsed_uri.hostname or ""
+        origin_host = parsed_origin.hostname or ""
+
+        if uri_host.lower() != origin_host.lower():
+            return False
+
+        loopback_hosts = ("localhost", "127.0.0.1", "::1")
+        is_loopback = uri_host.lower() in loopback_hosts
+
+        origin_port = parsed_origin.port
+        if is_loopback and origin_port is None:
+            return True
+
+        return parsed_uri.port == origin_port

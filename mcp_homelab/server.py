@@ -349,6 +349,14 @@ def start_server() -> None:
         # additional clients can self-register.
         client_id = os.environ.get("MCP_CLIENT_ID") or None
         client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
+        raw_origins = os.environ.get("MCP_ALLOWED_REDIRECT_ORIGINS", "")
+        allowed_redirect_origins: list[str] | None = None
+        if raw_origins.strip():
+            allowed_redirect_origins = [
+                origin.strip().rstrip("/")
+                for origin in raw_origins.split(",")
+                if origin.strip()
+            ]
 
         if not (client_id and client_secret):
             logger.warning(
@@ -374,6 +382,7 @@ def start_server() -> None:
         provider = HomelabOAuthProvider(
             client_id=client_id,
             client_secret=client_secret,
+            allowed_redirect_origins=allowed_redirect_origins,
         )
         mcp._auth_server_provider = provider
         mcp._token_verifier = ProviderTokenVerifier(provider)

@@ -30,11 +30,15 @@ from mcp_homelab.core.oauth_provider import (
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _make_client(client_id: str = "test-client") -> OAuthClientInformationFull:
+def _make_client(
+    client_id: str = "test-client",
+    redirect_uris: list[str] | None = None,
+) -> OAuthClientInformationFull:
+    uris = redirect_uris or ["http://localhost:3000/callback"]
     return OAuthClientInformationFull(
         client_id=client_id,
         client_secret="test-secret",
-        redirect_uris=[AnyUrl("http://localhost:3000/callback")],
+        redirect_uris=[AnyUrl(uri) for uri in uris],
         client_name="Test Client",
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
@@ -105,6 +109,110 @@ class TestClientRegistration:
         with pytest.raises(RegistrationError) as exc_info:
             await provider.register_client(client)
         assert "client_id" in (exc_info.value.error_description or "")
+
+
+class TestRedirectUriAllowlisting:
+    async def test_allowlist_match_succeeds(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "allowed-client",
+            redirect_uris=["https://claude.ai/callback"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("allowed-client")
+        assert result is not None
+
+    async def test_allowlist_rejection_raises_invalid_redirect_uri(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "blocked-client",
+            redirect_uris=["https://attacker.com/callback"],
+        )
+
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(client)
+
+        assert exc_info.value.error == "invalid_redirect_uri"
+
+    async def test_multiple_origins_one_matches(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai", "http://localhost"],
+        )
+        client = _make_client(
+            "multi-origin-client",
+            redirect_uris=["http://localhost:4000/cb"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("multi-origin-client")
+        assert result is not None
+
+    async def test_all_redirect_uris_must_pass(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "mixed-client",
+            redirect_uris=["https://claude.ai/cb", "https://evil.com/cb"],
+        )
+
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(client)
+
+        assert exc_info.value.error == "invalid_redirect_uri"
+
+    async def test_no_allowlist_accepts_any_redirect_uri(self) -> None:
+        provider = HomelabOAuthProvider()
+        client = _make_client(
+            "open-client",
+            redirect_uris=["https://attacker.com/callback"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("open-client")
+        assert result is not None
+
+    def test_warning_logged_when_no_allowlist(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            HomelabOAuthProvider()
+
+        assert "MCP_ALLOWED_REDIRECT_ORIGINS is not set" in caplog.text
+
+
+class TestUriMatchesOrigin:
+    @pytest.mark.parametrize(
+        ("redirect_uri", "origin", "expected"),
+        [
+            ("https://claude.ai/callback", "https://claude.ai", True),
+            ("https://attacker.com/callback", "https://claude.ai", False),
+            ("http://localhost:3000/cb", "http://localhost", True),
+            ("http://localhost:3000/cb", "http://localhost:3000", True),
+            ("http://localhost:4000/cb", "http://localhost:3000", False),
+            ("http://127.0.0.1:3000/cb", "http://localhost", False),
+            ("http://127.0.0.1:3000/cb", "http://127.0.0.1", True),
+            ("http://[::1]:5000/cb", "http://[::1]", True),
+            ("http://[::1]:5000/cb", "http://localhost", False),
+            ("http://claude.ai/callback", "https://claude.ai", False),
+        ],
+    )
+    def test_uri_matches_origin(
+        self,
+        redirect_uri: str,
+        origin: str,
+        expected: bool,
+    ) -> None:
+        assert HomelabOAuthProvider._uri_matches_origin(redirect_uri, origin) is expected
 
 
 # ── Authorization Code Flow ──────────────────────────────────────────────
