@@ -345,24 +345,23 @@ def start_server() -> None:
         )
 
         # Pre-registered OAuth client credentials (set via .env or systemd
-        # credentials).  When both are provided, DCR is disabled and only
-        # the static client can authenticate.
+        # credentials). Dynamic Client Registration remains enabled so
+        # additional clients can self-register.
         client_id = os.environ.get("MCP_CLIENT_ID") or None
         client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
-        dcr_enabled = not (client_id and client_secret)
 
-        if dcr_enabled:
+        if not (client_id and client_secret):
             logger.warning(
-                "MCP_CLIENT_ID / MCP_CLIENT_SECRET not set — Dynamic Client "
-                "Registration is enabled. Any client can register and obtain "
-                "tokens. Set both variables to lock down the server.",
+                "MCP_CLIENT_ID / MCP_CLIENT_SECRET not set — no static "
+                "OAuth client registered.  Only dynamically-registered "
+                "clients will be able to authenticate.",
             )
 
         mcp.settings.auth = AuthSettings(
             issuer_url=AnyHttpUrl(public_url),
             resource_server_url=AnyHttpUrl(public_url),
             client_registration_options=ClientRegistrationOptions(
-                enabled=dcr_enabled,
+                enabled=True,
             ),
             revocation_options=RevocationOptions(enabled=True),
         )

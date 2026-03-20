@@ -91,8 +91,8 @@ class HomelabOAuthProvider:
     restart — this is a feature, not a bug, for a homelab deployment.
 
     When *client_id* and *client_secret* are provided, the provider starts
-    with a pre-registered client and disables Dynamic Client Registration.
-    When omitted, DCR remains enabled (backward-compatible).
+    with a pre-registered client. Dynamic Client Registration remains
+    enabled for interoperability.
     """
 
     def __init__(
@@ -107,10 +107,8 @@ class HomelabOAuthProvider:
         # Map access token → refresh token for paired revocation.
         self._token_pairs: dict[str, str] = {}
 
-        self._dcr_enabled: bool = True
         if client_id and client_secret:
             self._register_static_client(client_id, client_secret)
-            self._dcr_enabled = False
 
     def _register_static_client(
         self, client_id: str, client_secret: str,
@@ -142,14 +140,6 @@ class HomelabOAuthProvider:
     async def register_client(
         self, client_info: OAuthClientInformationFull,
     ) -> None:
-        if not self._dcr_enabled:
-            raise RegistrationError(
-                error="invalid_client_metadata",
-                error_description=(
-                    "Dynamic Client Registration is disabled. "
-                    "Use pre-registered credentials."
-                ),
-            )
         if len(self._clients) >= MAX_CLIENTS:
             raise RegistrationError(
                 error="invalid_client_metadata",
