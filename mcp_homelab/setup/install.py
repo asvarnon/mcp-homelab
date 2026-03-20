@@ -202,7 +202,10 @@ def _encrypt_credentials(install_path: Path) -> list[str]:
     os.chmod(credstore, 0o700)
 
     encrypted: list[str] = []
-    for key, value in secrets.items():
+    for key in _CREDENTIAL_KEYS:
+        value = secrets.get(key)
+        if not value:
+            continue
         output_path = credstore / key
         try:
             result = subprocess.run(
@@ -246,6 +249,13 @@ def _write_systemd_unit(
     if credential_keys:
         credential_lines = "\n".join(
             f"LoadCredentialEncrypted={key}" for key in credential_keys
+        )
+        # In credential mode, remove EnvironmentFile= so .env secrets
+        # don't shadow the encrypted credentials at runtime.
+        rendered = rendered.replace(
+            f"EnvironmentFile={install_path}/.env\n",
+            "",
+            1,
         )
         # Insert credential directives before ExecStart=
         rendered = rendered.replace(

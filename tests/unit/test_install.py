@@ -546,6 +546,7 @@ class TestWriteSystemdUnitCredentials:
         fake_ref.read_text.return_value = (
             "[Service]\n"
             "WorkingDirectory=/opt/mcp-homelab\n"
+            "EnvironmentFile=/opt/mcp-homelab/.env\n"
             "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
         )
         fake_files = MagicMock(return_value=MagicMock())
@@ -565,6 +566,8 @@ class TestWriteSystemdUnitCredentials:
         cred_pos = rendered.index("LoadCredentialEncrypted=PROXMOX_TOKEN_ID")
         exec_pos = rendered.index("ExecStart=")
         assert cred_pos < exec_pos
+        # EnvironmentFile should be removed in credential mode
+        assert "EnvironmentFile=" not in rendered
 
     def test_no_credential_lines_without_keys(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         install_path = tmp_path / "mcp-homelab"
@@ -574,6 +577,7 @@ class TestWriteSystemdUnitCredentials:
         fake_ref.read_text.return_value = (
             "[Service]\n"
             "WorkingDirectory=/opt/mcp-homelab\n"
+            "EnvironmentFile=/opt/mcp-homelab/.env\n"
             "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
         )
         fake_files = MagicMock(return_value=MagicMock())
@@ -584,6 +588,8 @@ class TestWriteSystemdUnitCredentials:
 
         rendered = output_path.read_text(encoding="utf-8")
         assert "LoadCredentialEncrypted" not in rendered
+        # EnvironmentFile should be preserved when no credentials
+        assert "EnvironmentFile=" in rendered
 
     def test_credential_lines_with_container_stripping(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
@@ -595,6 +601,7 @@ class TestWriteSystemdUnitCredentials:
         fake_ref.read_text.return_value = (
             "[Service]\n"
             "WorkingDirectory=/opt/mcp-homelab\n"
+            "EnvironmentFile=/opt/mcp-homelab/.env\n"
             "PrivateTmp=true\n"
             "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
         )
@@ -612,3 +619,4 @@ class TestWriteSystemdUnitCredentials:
         rendered = output_path.read_text(encoding="utf-8")
         assert "LoadCredentialEncrypted=OPNSENSE_API_KEY" in rendered
         assert "PrivateTmp" not in rendered
+        assert "EnvironmentFile=" not in rendered
