@@ -167,8 +167,9 @@ def load_from_credentials_dir() -> None:
     decrypted credential files. Each file is named after the env var
     (e.g., ``PROXMOX_TOKEN_ID``) and contains the secret value.
 
-    Credentials found here override values from .env — encrypted
-    credentials are the preferred source when available.
+    Precedence (highest wins): shell env > credentials > .env.
+    Already-set env vars are never overwritten — this allows operators
+    to override credentials via the shell or process manager.
 
     Falls back silently when CREDENTIALS_DIRECTORY is not set (dev
     mode, non-systemd environments).
@@ -190,14 +191,26 @@ def load_from_credentials_dir() -> None:
     loaded_from_environment = 0
 
     for key in _CREDENTIAL_KEYS:
+        if os.environ.get(key):
+            logger.info("%s: loaded from environment", key)
+            loaded_from_environment += 1
+            continue
+
         credential_path = credentials_dir / key
         if credential_path.is_file():
-            os.environ[key] = credential_path.read_text().strip()
+            try:
+                value = credential_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read credential file %s: %s; "
+                    "falling back to environment/.env",
+                    credential_path,
+                    exc,
+                )
+                continue
+            os.environ[key] = value
             logger.info("%s: loaded from credentials directory", key)
             loaded_from_credentials += 1
-        elif os.environ.get(key):
-            logger.info("%s: loaded from environment/.env", key)
-            loaded_from_environment += 1
 
     logger.info(
         "Credential loading complete: %d from credentials directory, %d from environment",

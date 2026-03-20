@@ -479,20 +479,26 @@ class TestLoadFromCredentialsDir:
 
         assert any("4 from credentials directory" in r.message for r in caplog.records)
 
-    def test_credentials_override_env(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    def test_env_takes_precedence_over_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     ) -> None:
-        """Credential files take precedence over existing env vars from .env."""
+        """Already-set env vars are never overwritten by credential files."""
         cred_dir = tmp_path / "credentials"
         cred_dir.mkdir()
         monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
-        monkeypatch.setenv("PROXMOX_TOKEN_ID", "old-value-from-dotenv")
+        monkeypatch.setenv("PROXMOX_TOKEN_ID", "from-shell")
 
-        (cred_dir / "PROXMOX_TOKEN_ID").write_text("new-from-credentials", encoding="utf-8")
+        (cred_dir / "PROXMOX_TOKEN_ID").write_text("from-credentials", encoding="utf-8")
 
-        load_from_credentials_dir()
+        import logging
+        with caplog.at_level(logging.INFO, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
 
-        assert os.environ["PROXMOX_TOKEN_ID"] == "new-from-credentials"
+        assert os.environ["PROXMOX_TOKEN_ID"] == "from-shell"
+        assert any(
+            "PROXMOX_TOKEN_ID" in r.message and "loaded from environment" in r.message
+            for r in caplog.records
+        )
 
     def test_falls_back_to_env(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
@@ -525,6 +531,7 @@ class TestLoadFromCredentialsDir:
         cred_dir = tmp_path / "credentials"
         cred_dir.mkdir()
         monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.delenv("OPNSENSE_API_KEY", raising=False)
 
         (cred_dir / "OPNSENSE_API_KEY").write_text("  secret-with-spaces  \n", encoding="utf-8")
 
@@ -555,3 +562,38 @@ class TestLoadFromCredentialsDir:
         assert os.environ["PROXMOX_TOKEN_ID"] == "cred-tok"
         assert os.environ["OPNSENSE_API_KEY"] == "from-env"
         assert any("2 from credentials directory, 2 from environment" in r.message for r in caplog.records)
+
+    def test_warns_on_unreadable_credential(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unreadable credential files log a warning and are skipped."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+
+        for key in _CREDENTIAL_KEYS:
+            monkeypatch.delenv(key, raising=False)
+
+        # Write one good file and make one "unreadable" via monkeypatch
+        (cred_dir / "PROXMOX_TOKEN_ID").write_text("good-value", encoding="utf-8")
+        (cred_dir / "PROXMOX_TOKEN_SECRET").write_text("will-fail", encoding="utf-8")
+
+        original_read_text = Path.read_text
+
+        def patched_read_text(self: Path, *args: object, **kwargs: object) -> str:
+            if self.name == "PROXMOX_TOKEN_SECRET":
+                raise OSError("Permission denied")
+            return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", patched_read_text)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert os.environ.get("PROXMOX_TOKEN_ID") == "good-value"
+        assert "PROXMOX_TOKEN_SECRET" not in os.environ
+        assert any(
+            "Failed to read credential file" in r.message
+            for r in caplog.records
+        )
