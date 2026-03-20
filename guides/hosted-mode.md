@@ -17,6 +17,39 @@ Run mcp-homelab as a persistent service on a dedicated machine so multiple clien
 
 ---
 
+## ⚠️ Security Warning: Remote Hosting Requires Admin Password
+
+When mcp-homelab runs in HTTP mode and is reachable from the internet (e.g., via Cloudflare Tunnel), **anyone who can reach your server URL can complete the OAuth flow and call all MCP tools** unless you set an admin password.
+
+By default, the OAuth `authorize` endpoint auto-approves every request. This is fine for LAN-only deployments, but **critically dangerous** for internet-exposed servers — an attacker who discovers your URL can register an OAuth client, complete authorization, and query your entire homelab infrastructure.
+
+### How to fix: Set `MCP_ADMIN_PASSWORD_HASH`
+
+Generate a bcrypt hash of your admin password and add it to your `.env` file:
+
+```bash
+# Generate a hash (run on any machine with Python + bcrypt):
+python -c "import bcrypt; print(bcrypt.hashpw(input('Password: ').encode(), bcrypt.gensalt()).decode())"
+
+# Add to your .env file on the server:
+MCP_ADMIN_PASSWORD_HASH='$2b$12$...'   # paste the full hash here
+```
+
+When set, every OAuth authorization attempt will redirect to a password-protected login page. Only someone who knows the admin password can approve the connection.
+
+When **not set**, the server logs a warning and falls back to auto-approve (suitable for LAN-only or stdio mode).
+
+### When do you need this?
+
+| Deployment                     | Internet-reachable? | `MCP_ADMIN_PASSWORD_HASH` required? |
+| ------------------------------ | ------------------- | ----------------------------------- |
+| Local stdio                    | No                  | Not needed                          |
+| LAN-only HTTP                  | No                  | Recommended                         |
+| Cloudflare Tunnel / VPN        | Yes                 | **Required**                        |
+| Any public HTTPS reverse proxy | Yes                 | **Required**                        |
+
+---
+
 ## Step-by-Step: Local to Hosted
 
 ### Step 1 — Set up locally first (existing CLI)
