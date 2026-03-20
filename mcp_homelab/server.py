@@ -274,9 +274,15 @@ def start_server() -> None:
     (dev shim).  Reads config.yaml to decide between stdio and HTTP
     transport, wiring OAuth 2.1 auth when HTTP mode is active.
     """
-    from mcp_homelab.core.config import load_config, load_env, validate_env
+    from mcp_homelab.core.config import (
+        load_config,
+        load_env,
+        load_from_credentials_dir,
+        validate_env,
+    )
 
     load_env()
+    load_from_credentials_dir()
     validate_env()
 
     config = load_config()

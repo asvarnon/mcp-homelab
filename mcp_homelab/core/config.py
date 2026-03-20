@@ -150,6 +150,75 @@ def load_env() -> None:
     load_dotenv(env_path)
 
 
+# The secrets that can be loaded from systemd credentials directory.
+_CREDENTIAL_KEYS: tuple[str, ...] = (
+    "PROXMOX_TOKEN_ID",
+    "PROXMOX_TOKEN_SECRET",
+    "OPNSENSE_API_KEY",
+    "OPNSENSE_API_SECRET",
+)
+
+
+def load_from_credentials_dir() -> None:
+    """Load secrets from systemd's CREDENTIALS_DIRECTORY if available.
+
+    When the service runs with LoadCredentialEncrypted= directives,
+    systemd sets CREDENTIALS_DIRECTORY to a tmpfs path containing
+    decrypted credential files. Each file is named after the env var
+    (e.g., ``PROXMOX_TOKEN_ID``) and contains the secret value.
+
+    Precedence (highest wins): shell env > credentials > .env.
+    Already-set env vars are never overwritten — this allows operators
+    to override credentials via the shell or process manager.
+
+    Falls back silently when CREDENTIALS_DIRECTORY is not set (dev
+    mode, non-systemd environments).
+    """
+    credentials_dir_raw = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not credentials_dir_raw:
+        logger.debug("CREDENTIALS_DIRECTORY not set, skipping credential loading")
+        return
+
+    credentials_dir = Path(credentials_dir_raw)
+    if not credentials_dir.is_dir():
+        logger.warning(
+            "CREDENTIALS_DIRECTORY is set but directory does not exist: %s",
+            credentials_dir,
+        )
+        return
+
+    loaded_from_credentials = 0
+    loaded_from_environment = 0
+
+    for key in _CREDENTIAL_KEYS:
+        if os.environ.get(key):
+            logger.info("%s: loaded from environment", key)
+            loaded_from_environment += 1
+            continue
+
+        credential_path = credentials_dir / key
+        if credential_path.is_file():
+            try:
+                value = credential_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read credential file %s: %s; "
+                    "falling back to environment/.env",
+                    credential_path,
+                    exc,
+                )
+                continue
+            os.environ[key] = value
+            logger.info("%s: loaded from credentials directory", key)
+            loaded_from_credentials += 1
+
+    logger.info(
+        "Credential loading complete: %d from credentials directory, %d from environment",
+        loaded_from_credentials,
+        loaded_from_environment,
+    )
+
+
 _WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})
 
 
