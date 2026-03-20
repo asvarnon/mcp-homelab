@@ -11,6 +11,7 @@ from ruamel.yaml import YAML
 
 from mcp_homelab.setup.install import (
     _detect_container,
+    _encrypt_credentials,
     _ensure_linux,
     _resolve_public_url,
     _run_command,
@@ -369,3 +370,245 @@ class TestInstallPermissions:
             run_install(public_url="https://mcp.example.com")
 
         assert not chmod_calls
+
+
+class TestEncryptCredentials:
+    """_encrypt_credentials reads .env and runs systemd-creds for each secret."""
+
+    def test_encrypts_all_secrets(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        env_file = install_path / ".env"
+        env_file.write_text(
+            "PROXMOX_TOKEN_ID=user@pam!tok\n"
+            "PROXMOX_TOKEN_SECRET=aaaa-bbbb\n"
+            "OPNSENSE_API_KEY=key123\n"
+            "OPNSENSE_API_SECRET=secret456\n"
+            "SSH_USER=admin\n",
+            encoding="utf-8",
+        )
+
+        credstore = tmp_path / "credstore"
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.Path",
+            _patch_credstore_path(credstore),
+        )
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chown", lambda *a: None, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", lambda *a: None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
+
+        result = _encrypt_credentials(install_path)
+
+        assert len(result) == 4
+        assert "PROXMOX_TOKEN_ID" in result
+        assert "OPNSENSE_API_SECRET" in result
+        # SSH_USER is NOT a credential key — should be skipped
+        assert "SSH_USER" not in result
+        # All 4 should have triggered subprocess calls
+        assert len(calls) == 4
+
+    def test_exits_when_env_missing(self, tmp_path: Path) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        # No .env file
+
+        with pytest.raises(SystemExit, match="1"):
+            _encrypt_credentials(install_path)
+
+    def test_returns_empty_when_no_encryptable_secrets(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        env_file = install_path / ".env"
+        env_file.write_text("SSH_USER=admin\nSSH_KEY_PATH=~/.ssh/id_ed25519\n", encoding="utf-8")
+
+        result = _encrypt_credentials(install_path)
+
+        assert result == []
+
+    def test_exits_on_subprocess_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        env_file = install_path / ".env"
+        env_file.write_text("PROXMOX_TOKEN_ID=tok\n", encoding="utf-8")
+
+        credstore = tmp_path / "credstore"
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.Path",
+            _patch_credstore_path(credstore),
+        )
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chown", lambda *a: None, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", lambda *a: None)
+
+        def failing_run(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            return subprocess.CompletedProcess(command, 1, "", "encryption failed")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", failing_run)
+
+        with pytest.raises(SystemExit, match="1"):
+            _encrypt_credentials(install_path)
+
+    def test_skips_blank_values(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        env_file = install_path / ".env"
+        env_file.write_text(
+            "PROXMOX_TOKEN_ID=\n"
+            "PROXMOX_TOKEN_SECRET=real-secret\n",
+            encoding="utf-8",
+        )
+
+        credstore = tmp_path / "credstore"
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.Path",
+            _patch_credstore_path(credstore),
+        )
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chown", lambda *a: None, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", lambda *a: None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
+
+        result = _encrypt_credentials(install_path)
+
+        assert result == ["PROXMOX_TOKEN_SECRET"]
+        assert len(calls) == 1
+
+    def test_skips_comments_in_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        install_path.mkdir()
+        env_file = install_path / ".env"
+        env_file.write_text(
+            "# This is a comment\n"
+            "OPNSENSE_API_KEY=secret\n"
+            "\n"
+            "# OPNSENSE_API_SECRET=not-this\n",
+            encoding="utf-8",
+        )
+
+        credstore = tmp_path / "credstore"
+        monkeypatch.setattr(
+            "mcp_homelab.setup.install.Path",
+            _patch_credstore_path(credstore),
+        )
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chown", lambda *a: None, raising=False)
+        monkeypatch.setattr("mcp_homelab.setup.install.os.chmod", lambda *a: None)
+
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            calls.append(command)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr("mcp_homelab.setup.install.subprocess.run", fake_run)
+
+        result = _encrypt_credentials(install_path)
+
+        assert result == ["OPNSENSE_API_KEY"]
+        assert len(calls) == 1
+
+
+def _patch_credstore_path(credstore: Path) -> type:
+    """Return a Path subclass that redirects /etc/credstore.encrypted to tmp_path."""
+    _OrigPath = type(credstore)
+
+    class _PatchedPath(_OrigPath):  # type: ignore[misc]
+        def __new__(cls, *args: str, **kwargs: object) -> _PatchedPath:
+            path_str = str(args[0]) if args else ""
+            if path_str == "/etc/credstore.encrypted":
+                return _OrigPath.__new__(cls, str(credstore))
+            return _OrigPath.__new__(cls, *args, **kwargs)
+
+    return _PatchedPath
+
+
+class TestWriteSystemdUnitCredentials:
+    """_write_systemd_unit injects LoadCredentialEncrypted= directives."""
+
+    def test_injects_credential_lines(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        output_path = tmp_path / "mcp-homelab.service"
+
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
+            "[Service]\n"
+            "WorkingDirectory=/opt/mcp-homelab\n"
+            "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
+        )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
+
+        _write_systemd_unit(
+            install_path,
+            output_path,
+            credential_keys=["PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET"],
+        )
+
+        rendered = output_path.read_text(encoding="utf-8")
+        assert "LoadCredentialEncrypted=PROXMOX_TOKEN_ID" in rendered
+        assert "LoadCredentialEncrypted=PROXMOX_TOKEN_SECRET" in rendered
+        # Credential lines should appear before ExecStart
+        cred_pos = rendered.index("LoadCredentialEncrypted=PROXMOX_TOKEN_ID")
+        exec_pos = rendered.index("ExecStart=")
+        assert cred_pos < exec_pos
+
+    def test_no_credential_lines_without_keys(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        output_path = tmp_path / "mcp-homelab.service"
+
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
+            "[Service]\n"
+            "WorkingDirectory=/opt/mcp-homelab\n"
+            "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
+        )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
+
+        _write_systemd_unit(install_path, output_path)
+
+        rendered = output_path.read_text(encoding="utf-8")
+        assert "LoadCredentialEncrypted" not in rendered
+
+    def test_credential_lines_with_container_stripping(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        install_path = tmp_path / "mcp-homelab"
+        output_path = tmp_path / "mcp-homelab.service"
+
+        fake_ref = MagicMock()
+        fake_ref.read_text.return_value = (
+            "[Service]\n"
+            "WorkingDirectory=/opt/mcp-homelab\n"
+            "PrivateTmp=true\n"
+            "ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve\n"
+        )
+        fake_files = MagicMock(return_value=MagicMock())
+        fake_files.return_value.joinpath.return_value = fake_ref
+        monkeypatch.setattr("mcp_homelab.setup.install.importlib.resources.files", fake_files)
+
+        _write_systemd_unit(
+            install_path,
+            output_path,
+            in_container=True,
+            credential_keys=["OPNSENSE_API_KEY"],
+        )
+
+        rendered = output_path.read_text(encoding="utf-8")
+        assert "LoadCredentialEncrypted=OPNSENSE_API_KEY" in rendered
+        assert "PrivateTmp" not in rendered
