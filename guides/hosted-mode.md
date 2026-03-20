@@ -9,7 +9,7 @@ Run mcp-homelab as a persistent service on a dedicated machine so multiple clien
 | Aspect             | Local (default)                               | Hosted                                            |
 | ------------------ | --------------------------------------------- | ------------------------------------------------- |
 | Transport          | stdio                                         | HTTP                                              |
-| Auth               | None (process-level)                          | OAuth 2.1 (PKCE, dynamic client registration)     |
+| Auth               | None (process-level)                          | OAuth 2.1 (PKCE, pre-registered client or DCR)    |
 | Process management | Client spawns server                          | systemd service                                   |
 | Network access     | localhost only                                | LAN or internet-reachable                         |
 | Clients            | One (the spawning client)                     | Many, each points at server URL                   |

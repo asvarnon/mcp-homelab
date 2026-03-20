@@ -156,6 +156,8 @@ _CREDENTIAL_KEYS: tuple[str, ...] = (
     "PROXMOX_TOKEN_SECRET",
     "OPNSENSE_API_KEY",
     "OPNSENSE_API_SECRET",
+    "MCP_CLIENT_ID",
+    "MCP_CLIENT_SECRET",
 )
 
 
@@ -253,6 +255,29 @@ def validate_env() -> None:
                 "server.host is '0.0.0.0' (all interfaces) but server.public_url is not set. "
                 "The MCP SDK requires a valid public URL for Host header validation. "
                 "Set server.public_url to the URL clients will use (e.g., 'http://203.0.113.111:8000')."
+            )
+
+        # OAuth client credentials: both or neither.
+        client_id = os.environ.get("MCP_CLIENT_ID", "")
+        client_secret = os.environ.get("MCP_CLIENT_SECRET", "")
+        has_id = bool(client_id)
+        has_secret = bool(client_secret)
+        if has_id != has_secret:
+            raise EnvironmentError(
+                "MCP_CLIENT_ID and MCP_CLIENT_SECRET must both be set or both be empty. "
+                f"Got: MCP_CLIENT_ID={'set' if has_id else 'empty'}, "
+                f"MCP_CLIENT_SECRET={'set' if has_secret else 'empty'}."
+            )
+        _MIN_CREDENTIAL_LEN = 32
+        if has_id and len(client_id) < _MIN_CREDENTIAL_LEN:
+            raise EnvironmentError(
+                f"MCP_CLIENT_ID must be at least {_MIN_CREDENTIAL_LEN} characters "
+                f"(got {len(client_id)}). Use a cryptographically random value."
+            )
+        if has_secret and len(client_secret) < _MIN_CREDENTIAL_LEN:
+            raise EnvironmentError(
+                f"MCP_CLIENT_SECRET must be at least {_MIN_CREDENTIAL_LEN} characters "
+                f"(got {len(client_secret)}). Use a cryptographically random value."
             )
 
     if missing:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -14,7 +15,7 @@ from mcp.server.auth.provider import (
     RefreshToken,
     RegistrationError,
 )
-from mcp.shared.auth import OAuthClientInformationFull
+from mcp.shared.auth import InvalidRedirectUriError, OAuthClientInformationFull
 
 from mcp_homelab.core.oauth_provider import (
     ACCESS_TOKEN_TTL,
@@ -22,6 +23,7 @@ from mcp_homelab.core.oauth_provider import (
     MAX_AUTH_CODES,
     MAX_CLIENTS,
     REFRESH_TOKEN_TTL,
+    FlexibleRedirectClient,
     HomelabOAuthProvider,
 )
 
@@ -437,3 +439,153 @@ class TestExpiredCodeEviction:
         await provider.authorize(client, params)
 
         assert await provider.load_authorization_code(client, code) is None
+
+
+# ── Pre-registered client (DCR lockdown) ──────────────────────────────────
+
+_STATIC_ID = "a" * 32
+_STATIC_SECRET = "b" * 32
+
+
+class TestPreRegisteredClient:
+    """Tests for static client pre-registration and DCR lockdown."""
+
+    async def test_pre_registered_client_available_on_init(self) -> None:
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+        client = await provider.get_client(_STATIC_ID)
+
+        assert client is not None
+        assert client.client_id == _STATIC_ID
+        assert client.client_secret == _STATIC_SECRET
+        assert client.token_endpoint_auth_method == "client_secret_post"
+
+    async def test_dcr_disabled_when_credentials_provided(self) -> None:
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(_make_client("intruder"))
+        assert "disabled" in (exc_info.value.error_description or "").lower()
+
+    async def test_dcr_enabled_when_no_credentials(self) -> None:
+        provider = HomelabOAuthProvider()
+        client = _make_client("dynamic-client")
+
+        await provider.register_client(client)
+        result = await provider.get_client("dynamic-client")
+
+        assert result is not None
+        assert result.client_id == "dynamic-client"
+
+    async def test_pre_registered_client_full_auth_flow(self) -> None:
+        """Static client can authorize, exchange code, and get tokens."""
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+        client = await provider.get_client(_STATIC_ID)
+        assert client is not None
+
+        params = _make_auth_params()
+        redirect_url = await provider.authorize(client, params)
+        code = _extract_code(redirect_url)
+
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        token = await provider.exchange_authorization_code(client, auth_code)
+        assert token.access_token
+        assert token.refresh_token
+
+
+class TestFlexibleRedirectClient:
+    """Tests for FlexibleRedirectClient redirect URI validation."""
+
+    def test_accepts_localhost_with_port(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://localhost:9876/callback"))
+        assert str(result).startswith("http://localhost:9876")
+
+    def test_accepts_127_0_0_1(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://127.0.0.1:5555/cb"))
+        assert str(result).startswith("http://127.0.0.1")
+
+    def test_accepts_https(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("https://example.com/callback"))
+        assert str(result).startswith("https://")
+
+    def test_rejects_non_localhost_http(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://evil.com/callback"))
+
+    def test_rejects_none(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="required"):
+            client.validate_redirect_uri(None)
+
+    def test_rejects_localhost_subdomain(self) -> None:
+        """Regression: startswith('http://localhost') accepted localhost.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://localhost.evil.com/callback"))
+
+    def test_rejects_127_subdomain(self) -> None:
+        """Regression: startswith('http://127.0.0.1') accepted 127.0.0.1.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://127.0.0.1.evil.com/callback"))
+
+    def test_accepts_ipv6_loopback(self) -> None:
+        """RFC 8252 §8.3: ::1 is a valid loopback address."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://[::1]:8080/callback"))
+        assert "::1" in str(result)
+
+    def test_rejects_non_loopback_ip(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://192.168.1.100/callback"))
+
+
+class TestStaticClientLogging:
+    """Verify pre-registered client doesn't leak credentials to logs."""
+
+    def test_client_id_not_in_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        secret_id = "a" * 32
+        secret_pw = "b" * 32
+        with caplog.at_level(logging.INFO):
+            HomelabOAuthProvider(client_id=secret_id, client_secret=secret_pw)
+        assert secret_id not in caplog.text
+        assert "Pre-registered static OAuth client" in caplog.text

@@ -9,6 +9,7 @@ Can be run directly (``python server.py``) or via the CLI
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -17,6 +18,8 @@ from pathlib import Path
 # that spawn from a foreign cwd can find config.yaml and .env.
 from mcp_homelab.core.config import bootstrap_config_dir
 bootstrap_config_dir(Path(__file__).resolve().parent.parent)
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.fastmcp import FastMCP
 
@@ -341,10 +344,26 @@ def start_server() -> None:
             allowed_origins=allowed_origins,
         )
 
+        # Pre-registered OAuth client credentials (set via .env or systemd
+        # credentials).  When both are provided, DCR is disabled and only
+        # the static client can authenticate.
+        client_id = os.environ.get("MCP_CLIENT_ID") or None
+        client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
+        dcr_enabled = not (client_id and client_secret)
+
+        if dcr_enabled:
+            logger.warning(
+                "MCP_CLIENT_ID / MCP_CLIENT_SECRET not set — Dynamic Client "
+                "Registration is enabled. Any client can register and obtain "
+                "tokens. Set both variables to lock down the server.",
+            )
+
         mcp.settings.auth = AuthSettings(
             issuer_url=AnyHttpUrl(public_url),
             resource_server_url=AnyHttpUrl(public_url),
-            client_registration_options=ClientRegistrationOptions(enabled=True),
+            client_registration_options=ClientRegistrationOptions(
+                enabled=dcr_enabled,
+            ),
             revocation_options=RevocationOptions(enabled=True),
         )
 
@@ -353,7 +372,10 @@ def start_server() -> None:
         # because the SDK reads them at run() time when building Starlette
         # routes — not at construction.  Integration tests verify auth is
         # enforced end-to-end, so SDK renames will be caught immediately.
-        provider = HomelabOAuthProvider()
+        provider = HomelabOAuthProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+        )
         mcp._auth_server_provider = provider
         mcp._token_verifier = ProviderTokenVerifier(provider)
 

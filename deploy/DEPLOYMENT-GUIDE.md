@@ -1,6 +1,8 @@
 # mcp-homelab HTTP Deployment Guide
 
-Complete instructions for deploying mcp-homelab with OAuth 2.1 authentication and Cloudflare Tunnel to an LXC container, enabling Claude.ai (web + mobile) and other remote MCP clients to access your homelab infrastructure.
+Complete instructions for deploying mcp-homelab with OAuth 2.1 authentication and Cloudflare Tunnel, enabling Claude.ai (web + mobile) and other remote MCP clients to access your homelab infrastructure.
+
+**Recommended:** Deploy to a **VM running Ubuntu Server**. A full VM gives you proper systemd sandboxing (`ProtectHome`, `ProtectSystem`, `PrivateTmp`) and avoids LXC-specific workarounds (QUIC protocol failures, stripped sandbox directives). LXC containers still work if you prefer lightweight — see the notes in each phase.
 
 ## Architecture Overview
 
@@ -13,9 +15,9 @@ Claude.ai / Mobile
 └──────────┬───────────┘
            ▼
 ┌──────────────────────┐
-│  LXC Container       │  Debian 12, VLAN 10
+│  VM (Ubuntu Server)  │  VLAN 10
 │  ┌────────────────┐  │
-│  │  Uvicorn :8000 │  │  OAuth 2.1 auto-approve + MCP Streamable HTTP
+│  │  Uvicorn :8000 │  │  OAuth 2.1 + MCP Streamable HTTP
 │  │  mcp-homelab   │  │
 │  └──────┬─────────┘  │
 │         │ SSH/REST    │
@@ -32,9 +34,9 @@ Claude.ai / Mobile
 
 ### Infrastructure
 
-- **Proxmox VE** hypervisor with an LXC template (e.g., `debian-12-standard`)
-- **Static IP** available on the management VLAN for the LXC
-- **SSH access** to the Proxmox host (for LXC bootstrap — user must be `root` or have passwordless `sudo` for `pct exec`)
+- **Proxmox VE** hypervisor (or any host that can run an Ubuntu Server VM)
+- **Static IP** available on the management VLAN for the VM
+- **SSH access** to the VM (or to the Proxmox host for LXC bootstrap via `pct exec`)
 - **SSH access** to each infrastructure host you want tools to reach
 
 ### Cloudflare
@@ -48,8 +50,8 @@ Claude.ai / Mobile
 | Credential                  | Where to get it                                                    | Used for                                  |
 | --------------------------- | ------------------------------------------------------------------ | ----------------------------------------- |
 | **Cloudflare Tunnel token** | Zero Trust → Tunnels → your tunnel → Configure → Install connector | `CF_TUNNEL_TOKEN` env var for `deploy.py` |
-| **Proxmox API token**       | Datacenter → Permissions → API Tokens → Add                        | `.env` on LXC                             |
-| **OPNsense API key/secret** | System → Access → Users → API Keys                                 | `.env` on LXC                             |
+| **Proxmox API token**       | Datacenter → Permissions → API Tokens → Add                        | `.env` on the server                      |
+| **OPNsense API key/secret** | System → Access → Users → API Keys                                 | `.env` on the server                      |
 
 ### Developer machine
 
@@ -59,11 +61,33 @@ Claude.ai / Mobile
 
 ---
 
-## Phase 1: Create the LXC Container
+## Phase 1: Create the Server (VM or LXC)
 
-Create the LXC on Proxmox. You can use the Proxmox web UI, `pct create`, or the mcp-homelab `create_lxc` tool if you already have a working MCP instance.
+### Option A: VM with Ubuntu Server (recommended)
 
-Example via Proxmox CLI:
+Create a VM in Proxmox and install Ubuntu Server 24.04 LTS.
+
+1. Download the Ubuntu Server ISO to Proxmox (`local` storage → ISO Images)
+2. Create a VM via the Proxmox web UI or CLI:
+   - **CPU:** 1 core (2 if budget allows)
+   - **Memory:** 1024 MB minimum (2048 MB recommended)
+   - **Disk:** 8 GB minimum
+   - **Network:** bridge `vmbr0`, VLAN tag matching your management VLAN
+3. Boot the VM and install Ubuntu Server:
+   - Set a static IP on your management VLAN
+   - Enable **OpenSSH server** during install
+   - Create a user (e.g., `root` or your admin user)
+4. After install, verify SSH access from your workstation:
+   ```bash
+   ssh root@<SERVER_IP> hostname
+   ```
+
+> **Why VM over LXC?** A VM supports full systemd sandboxing (`ProtectHome`, `ProtectSystem`, `PrivateTmp`), avoids QUIC protocol failures with Cloudflare Tunnel, and behaves like a standard Linux server with no container-specific surprises.
+
+### Option B: LXC Container (lightweight alternative)
+
+If you prefer a lighter footprint, create an LXC container instead. Note that you'll need the QUIC→HTTP/2 workaround for Cloudflare Tunnel (covered in Phase 2) and systemd sandbox directives may be silently stripped.
+
 ```bash
 pct create <VMID> local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
   --hostname mcp-server \
@@ -71,16 +95,10 @@ pct create <VMID> local:vztmpl/debian-12-standard_12.7-1_amd64.tar.zst \
   --memory 1024 \
   --swap 512 \
   --rootfs local-lvm:4 \
-  --net0 name=eth0,bridge=vmbr0,tag=<VLAN_ID>,ip=<LXC_IP>/24,gw=<GATEWAY_IP> \
+  --net0 name=eth0,bridge=vmbr0,tag=<VLAN_ID>,ip=<SERVER_IP>/24,gw=<GATEWAY_IP> \
   --unprivileged 1 \
   --start 1
 ```
-
-**Key settings:**
-- **Memory:** 1024 MB recommended (512 MB works but tight under load)
-- **VLAN tag:** Match your management VLAN
-- **Static IP:** Required — the deploy script needs a known IP
-- **Start after create:** Yes — the container must be running for deploy
 
 Verify the container is running and has network connectivity:
 ```bash
@@ -109,23 +127,26 @@ pct exec <VMID> -- ping -c1 8.8.8.8
 
 ### Rotating or recreating the tunnel token
 
-If you delete and recreate the tunnel, you get a **new token**. To update the LXC without a full redeploy:
+If you delete and recreate the tunnel, you get a **new token**. To update the server without a full redeploy:
 
 ```bash
-# SSH to the LXC as root
+# SSH to the server as root
 cloudflared service uninstall
 
 # Pass token via stdin to avoid shell history / process listing exposure
 echo '<new-token>' | cloudflared service install "$(cat /dev/stdin)"
 # Or: set CF_TUNNEL_TOKEN env var and use $CF_TUNNEL_TOKEN
 
-# Patch for HTTP/2 (QUIC fails in LXC containers due to UDP buffer limits)
-sed -i 's|--no-autoupdate tunnel run|--no-autoupdate --protocol http2 tunnel run|' \
-  /etc/systemd/system/cloudflared.service
-
 systemctl daemon-reload
 systemctl restart cloudflared
 ```
+
+> **LXC only:** If running in an LXC container, QUIC fails due to UDP buffer limits. Force HTTP/2:
+> ```bash
+> sed -i 's|--no-autoupdate tunnel run|--no-autoupdate --protocol http2 tunnel run|' \
+>   /etc/systemd/system/cloudflared.service
+> systemctl daemon-reload && systemctl restart cloudflared
+> ```
 
 ---
 
@@ -133,29 +154,36 @@ systemctl restart cloudflared
 
 The deploy script automates: system package installation, cloudflared, repo clone, Python venv, systemd services, and Cloudflare Tunnel setup.
 
-### First deploy (with Proxmox bootstrap)
+### Standard deploy (VM or LXC with SSH access)
 
-On your **first deploy** to a fresh LXC, use `--pve-host` to bootstrap SSH access. This installs `openssh-server` in the LXC and injects your SSH key via `pct exec`.
+If you can already SSH to the server (e.g., a VM where you enabled SSH during Ubuntu install), this is all you need:
+
+```bash
+export CF_TUNNEL_TOKEN="eyJhIjoi..."
+
+python deploy/deploy.py \
+  --host <SERVER_IP> \
+  --public-url "https://mcp.example.com"
+```
 
 ```powershell
 # Windows PowerShell
 $env:CF_TUNNEL_TOKEN = "eyJhIjoi..."
 
 python deploy/deploy.py `
-  --host <LXC_IP> `
-  --public-url "https://mcp.example.com" `
-  --pve-host <PVE_IP> `
-  --pve-user <PVE_SSH_USER> `
-  --pve-key "$env:USERPROFILE\.ssh\<PVE_KEY>" `
-  --vmid <VMID>
+  --host <SERVER_IP> `
+  --public-url "https://mcp.example.com"
 ```
 
+### First deploy to LXC (with Proxmox bootstrap)
+
+For a fresh LXC container without SSH, use `--pve-host` to bootstrap SSH access via `pct exec`:
+
 ```bash
-# Linux / macOS
 export CF_TUNNEL_TOKEN="eyJhIjoi..."
 
 python deploy/deploy.py \
-  --host <LXC_IP> \
+  --host <SERVER_IP> \
   --public-url "https://mcp.example.com" \
   --pve-host <PVE_IP> \
   --pve-user <PVE_SSH_USER> \
@@ -163,33 +191,46 @@ python deploy/deploy.py \
   --vmid <VMID>
 ```
 
-### Subsequent deploys (SSH already working)
+```powershell
+# Windows PowerShell
+$env:CF_TUNNEL_TOKEN = "eyJhIjoi..."
 
-If SSH to the LXC already works, omit the `--pve-*` flags:
+python deploy/deploy.py `
+  --host <SERVER_IP> `
+  --public-url "https://mcp.example.com" `
+  --pve-host <PVE_IP> `
+  --pve-user <PVE_SSH_USER> `
+  --pve-key "$env:USERPROFILE\.ssh\<PVE_KEY>" `
+  --vmid <VMID>
+```
+
+### Subsequent deploys
+
+Once SSH works, just re-run without the `--pve-*` flags:
 
 ```bash
 python deploy/deploy.py \
-  --host <LXC_IP> \
+  --host <SERVER_IP> \
   --public-url "https://mcp.example.com"
 ```
 
 ### What deploy.py does (13 steps, 14 with bootstrap)
 
-| Step | Action                                  | Notes                                                                  |
-| ---- | --------------------------------------- | ---------------------------------------------------------------------- |
-| 1    | Generate/locate SSH bootstrap key       | `~/.ssh/mcp-server-bootstrap`                                          |
-| 2*   | Bootstrap SSH in LXC via PVE `pct exec` | Only with `--pve-host`. Installs openssh-server + injects key          |
-| 3    | Verify SSH connectivity                 | Runs `hostname` on target                                              |
-| 4    | Install system packages                 | python3, git, curl, gnupg, ca-certificates                             |
-| 5    | Install cloudflared                     | Via Cloudflare apt repo                                                |
-| 6    | Create `mcp` service user               | System user for running the service                                    |
-| 7    | Clone/update repository                 | From GitHub, specified branch                                          |
-| 8    | Create venv + install dependencies      | `/opt/mcp-homelab/.venv`                                               |
-| 9    | Write `config.yaml`                     | Minimal: `transport: http`, `host: 0.0.0.0`, `public_url`, `hosts: {}` |
-| 10   | Write `.env`                            | Minimal: `MCP_HOMELAB_CONFIG_DIR` only                                 |
-| 11   | Install systemd unit                    | `mcp-homelab.service` → enabled                                        |
-| 12   | Start service                           | `systemctl restart mcp-homelab` + verify active                        |
-| 13   | Install cloudflared tunnel              | Token via stdin, HTTP/2 patch applied                                  |
+| Step | Action                                  | Notes                                                                    |
+| ---- | --------------------------------------- | ------------------------------------------------------------------------ |
+| 1    | Generate/locate SSH bootstrap key       | `~/.ssh/mcp-server-bootstrap`                                            |
+| 2*   | Bootstrap SSH in LXC via PVE `pct exec` | Only with `--pve-host` (LXC only). Installs openssh-server + injects key |
+| 3    | Verify SSH connectivity                 | Runs `hostname` on target                                                |
+| 4    | Install system packages                 | python3, git, curl, gnupg, ca-certificates                               |
+| 5    | Install cloudflared                     | Via Cloudflare apt repo                                                  |
+| 6    | Create `mcp` service user               | System user for running the service                                      |
+| 7    | Clone/update repository                 | From GitHub, specified branch                                            |
+| 8    | Create venv + install dependencies      | `/opt/mcp-homelab/.venv`                                                 |
+| 9    | Write `config.yaml`                     | Minimal: `transport: http`, `host: 0.0.0.0`, `public_url`, `hosts: {}`   |
+| 10   | Write `.env`                            | Minimal: `MCP_HOMELAB_CONFIG_DIR` only                                   |
+| 11   | Install systemd unit                    | `mcp-homelab.service` → enabled                                          |
+| 12   | Start service                           | `systemctl restart mcp-homelab` + verify active                          |
+| 13   | Install cloudflared tunnel              | Token via stdin, HTTP/2 patch applied                                    |
 
 ### What deploy.py does NOT do
 
@@ -209,7 +250,7 @@ After `deploy.py` completes, the server is running but has no SSH targets or API
 
 ### 4.1 Write the full `config.yaml`
 
-Create a `config.yaml` on your dev machine with all host entries, then transfer it to the LXC.
+Create a `config.yaml` on your dev machine with all host entries, then transfer it to the server.
 
 Example `config.yaml`:
 ```yaml
@@ -249,18 +290,18 @@ opnsense:
   verify_ssl: false
 ```
 
-Transfer to the LXC (base64 method — reliable across Windows/Linux):
+Transfer to the server (base64 method — reliable across Windows/Linux):
 
 ```powershell
 # PowerShell
 $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("config.yaml"))
-ssh -i "$env:USERPROFILE\.ssh\mcp-server-bootstrap" root@<LXC_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
+ssh -i "$env:USERPROFILE\.ssh\mcp-server-bootstrap" root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
 ```
 
 ```bash
 # Linux / macOS
 b64=$(base64 -w0 config.yaml 2>/dev/null || base64 config.yaml | tr -d '\n')
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
 ```
 
 ### 4.2 Generate SSH keypair for the `mcp` service user
@@ -268,8 +309,8 @@ ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP> "echo $b64 | base64 -d > /opt/m
 The `mcp` user needs SSH access to each host in `config.yaml`.
 
 ```bash
-# SSH to the LXC as root
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP>
+# SSH to the server as root
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
 
 # Create home directory (deploy.py uses --no-create-home)
 mkdir -p /home/mcp/.ssh
@@ -282,7 +323,7 @@ chown mcp:mcp /home/mcp/.ssh/id_ed25519 /home/mcp/.ssh/id_ed25519.pub
 chmod 600 /home/mcp/.ssh/id_ed25519
 
 # Accept new host keys automatically (paramiko uses AutoAddPolicy, but
-# also create SSH config for any manual debugging from the LXC)
+# also create SSH config for any manual debugging from the server)
 cat > /home/mcp/.ssh/config << 'EOF'
 Host *
     StrictHostKeyChecking accept-new
@@ -305,20 +346,20 @@ For **each** host in your `config.yaml`, append the `mcp` user's public key to t
 ssh <ssh_user>@<host_ip> 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "<pubkey>" >> ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys'
 ```
 
-**Verify connectivity** from the LXC:
+**Verify connectivity** from the server:
 ```bash
-# SSH to LXC, then test as mcp user
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP>
+# SSH to server, then test as mcp user
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
 su -s /bin/bash - mcp -c "ssh -i /home/mcp/.ssh/id_ed25519 <ssh_user>@<host_ip> hostname"
 ```
 
 ### 4.4 Add API credentials to `.env`
 
-Add your Proxmox API token and OPNsense API key to the `.env` file on the LXC.
+Add your Proxmox API token and OPNsense API key to the `.env` file on the server.
 
 ```bash
-# SSH to the LXC as root
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP>
+# SSH to the server as root
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
 
 # Append credentials (use your actual values)
 cat >> /opt/mcp-homelab/.env << 'EOF'
@@ -332,7 +373,27 @@ chmod 400 /opt/mcp-homelab/.env
 chown mcp:mcp /opt/mcp-homelab/.env
 ```
 
-### 4.5 Restart the service
+### 4.5 Lock down OAuth client registration (recommended)
+
+By default, the server auto-approves all OAuth Dynamic Client Registration requests. To restrict access to a single pre-registered client, generate credentials and add them to `.env`:
+
+```bash
+# Generate credentials (both must be ≥32 characters)
+python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# Run twice — once for client ID, once for client secret
+# Append to .env on the server
+cat >> /opt/mcp-homelab/.env << 'EOF'
+MCP_CLIENT_ID=<generated-client-id>
+MCP_CLIENT_SECRET=<generated-client-secret>
+EOF
+```
+
+When both are set, DCR is disabled — only the pre-registered client can authenticate. Enter these values in Claude Desktop's OAuth prompt or store them in your client configuration.
+
+If neither is set, the server falls back to open DCR (backward compatible, suitable for trusted LANs only).
+
+### 4.6 Restart the service
 
 ```bash
 systemctl restart mcp-homelab
@@ -352,7 +413,7 @@ journalctl -u mcp-homelab -n 20   # check for errors
 1. Go to [Claude.ai Settings → Integrations](https://claude.ai/settings/integrations) (or Claude mobile → Settings → Integrations)
 2. Click **Add Integration** → **Custom MCP Server**
 3. Enter your public URL (e.g., `https://mcp.example.com`)
-4. Claude will perform the OAuth 2.1 flow automatically (Dynamic Client Registration → authorize → token exchange)
+4. Claude will perform the OAuth 2.1 flow automatically. If `MCP_CLIENT_ID` / `MCP_CLIENT_SECRET` are set, enter those credentials when prompted. Otherwise, Claude uses Dynamic Client Registration.
 5. You should see all tools listed (scan_infrastructure, list_nodes, get_node_status, etc.)
 
 ### Run validation checks
@@ -396,7 +457,7 @@ journalctl -u mcp-homelab -n 50 --no-pager
 | -------------------------- | ------------------------------------------ | ----------------------------------------------------- |
 | All hosts unreachable      | `hosts: {}` in config.yaml                 | Write full config.yaml (step 4.1)                     |
 | Auth failed                | mcp pubkey not in target's authorized_keys | Deploy key per step 4.3                               |
-| Connection timeout         | Cross-VLAN routing not working             | Verify firewall allows LXC subnet → target subnet     |
+| Connection timeout         | Cross-VLAN routing not working             | Verify firewall allows server subnet → target subnet  |
 | Permission denied (docker) | sudo_docker not set or sudoers missing     | Set `sudo_docker: true` + configure sudoers on target |
 
 ### Cloudflare Tunnel issues
@@ -405,11 +466,11 @@ journalctl -u mcp-homelab -n 50 --no-pager
 journalctl -u cloudflared -n 50 --no-pager
 ```
 
-| Symptom                          | Cause                                    | Fix                                                                                  |
-| -------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------ |
-| QUIC timeout / connection failed | QUIC protocol fails in LXC               | Verify HTTP/2 patch: `grep 'protocol http2' /etc/systemd/system/cloudflared.service` |
-| Invalid token                    | Tunnel deleted/recreated in CF dashboard | Reinstall with new token (see Phase 2)                                               |
-| ERR Tunnel not found             | Tunnel UUID changed                      | Uninstall + reinstall cloudflared service                                            |
+| Symptom                          | Cause                                    | Fix                                                                                                                  |
+| -------------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| QUIC timeout / connection failed | QUIC protocol fails in LXC containers    | LXC only: verify HTTP/2 patch: `grep 'protocol http2' /etc/systemd/system/cloudflared.service`. VMs don't need this. |
+| Invalid token                    | Tunnel deleted/recreated in CF dashboard | Reinstall with new token (see Phase 2)                                                                               |
+| ERR Tunnel not found             | Tunnel UUID changed                      | Uninstall + reinstall cloudflared service                                                                            |
 
 ---
 
@@ -418,7 +479,7 @@ journalctl -u cloudflared -n 50 --no-pager
 ### Update the server code
 
 ```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP>
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
 cd /opt/mcp-homelab
 git pull
 .venv/bin/pip install -r requirements.txt   # if deps changed
@@ -450,14 +511,14 @@ systemctl status cloudflared
 Re-run `deploy.py` — it's idempotent. It will `git pull` instead of re-cloning, reinstall deps, and restart services. Note: this **overwrites** `config.yaml` and `.env` with minimal versions. Back up your config first:
 
 ```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP> \
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> \
   "cp /opt/mcp-homelab/config.yaml /opt/mcp-homelab/config.yaml.bak && cp /opt/mcp-homelab/.env /opt/mcp-homelab/.env.bak"
 ```
 
 Then re-run `deploy.py` and restore your config:
 
 ```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<LXC_IP> \
+ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> \
   "cp /opt/mcp-homelab/config.yaml.bak /opt/mcp-homelab/config.yaml && cp /opt/mcp-homelab/.env.bak /opt/mcp-homelab/.env && systemctl restart mcp-homelab"
 ```
 

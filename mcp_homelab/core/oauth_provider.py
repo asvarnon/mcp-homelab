@@ -18,6 +18,9 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from urllib.parse import urlparse
+
+from pydantic import AnyUrl
 
 from mcp.server.auth.provider import (
     AccessToken,
@@ -28,7 +31,11 @@ from mcp.server.auth.provider import (
     RegistrationError,
     construct_redirect_uri,
 )
-from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+from mcp.shared.auth import (
+    InvalidRedirectUriError,
+    OAuthClientInformationFull,
+    OAuthToken,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,21 +49,90 @@ ACCESS_TOKEN_TTL: int = 60 * 60        # 1 hour
 REFRESH_TOKEN_TTL: int = 30 * 24 * 3600  # 30 days
 
 
+class FlexibleRedirectClient(OAuthClientInformationFull):
+    """Pre-registered client that accepts any localhost or HTTPS redirect URI.
+
+    The MCP SDK validates redirect URIs via exact list membership. Claude
+    Desktop sends dynamic ``http://localhost:PORT/callback`` URIs (the port
+    changes each session), so exact matching is impossible. This subclass
+    overrides ``validate_redirect_uri`` to accept any URI that is localhost
+    or HTTPS — matching the MCP spec requirement: *"Redirect URIs MUST be
+    either localhost URLs or HTTPS URLs."*
+
+    PKCE S256 is required by MCP, so authorization code interception risk
+    is mitigated even with flexible redirect URI matching.
+    """
+
+    def validate_redirect_uri(self, redirect_uri: AnyUrl | None) -> AnyUrl:
+        if redirect_uri is None:
+            raise InvalidRedirectUriError(
+                "redirect_uri is required for pre-registered client",
+            )
+        uri_str = str(redirect_uri)
+        parsed = urlparse(uri_str)
+        if not (
+            parsed.scheme == "https"
+            or (
+                parsed.scheme == "http"
+                and parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            )
+        ):
+            raise InvalidRedirectUriError(
+                f"Redirect URI must be localhost or HTTPS, got: {uri_str}",
+            )
+        return redirect_uri
+
+
 class HomelabOAuthProvider:
     """Single-user, in-memory OAuth 2.1 authorization server.
 
     Implements ``OAuthAuthorizationServerProvider`` with auto-approve
     authorization (no consent screen). All tokens are cleared on process
     restart — this is a feature, not a bug, for a homelab deployment.
+
+    When *client_id* and *client_secret* are provided, the provider starts
+    with a pre-registered client and disables Dynamic Client Registration.
+    When omitted, DCR remains enabled (backward-compatible).
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        client_id: str | None = None,
+        client_secret: str | None = None,
+    ) -> None:
         self._clients: dict[str, OAuthClientInformationFull] = {}
         self._auth_codes: dict[str, AuthorizationCode] = {}
         self._access_tokens: dict[str, AccessToken] = {}
         self._refresh_tokens: dict[str, RefreshToken] = {}
         # Map access token → refresh token for paired revocation.
         self._token_pairs: dict[str, str] = {}
+
+        self._dcr_enabled: bool = True
+        if client_id and client_secret:
+            self._register_static_client(client_id, client_secret)
+            self._dcr_enabled = False
+
+    def _register_static_client(
+        self, client_id: str, client_secret: str,
+    ) -> None:
+        """Pre-populate ``_clients`` with a static credential pair.
+
+        Uses ``FlexibleRedirectClient`` to accept dynamic localhost redirect
+        URIs from Claude Desktop.  ``token_endpoint_auth_method`` is set
+        explicitly to ``client_secret_post`` so the SDK's
+        ``ClientAuthenticator`` validates the secret via
+        ``hmac.compare_digest``.
+        """
+        client = FlexibleRedirectClient(
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+            token_endpoint_auth_method="client_secret_post",
+            grant_types=["authorization_code", "refresh_token"],
+            response_types=["code"],
+        )
+        self._clients[client_id] = client
+        logger.info("Pre-registered static OAuth client")
 
     # ── Client registration (RFC 7591) ────────────────────────────────────
 
@@ -66,6 +142,14 @@ class HomelabOAuthProvider:
     async def register_client(
         self, client_info: OAuthClientInformationFull,
     ) -> None:
+        if not self._dcr_enabled:
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description=(
+                    "Dynamic Client Registration is disabled. "
+                    "Use pre-registered credentials."
+                ),
+            )
         if len(self._clients) >= MAX_CLIENTS:
             raise RegistrationError(
                 error="invalid_client_metadata",

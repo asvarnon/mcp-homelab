@@ -171,9 +171,14 @@ Once the container is running:
 1. Open Claude Desktop → Settings → MCP Servers
 2. Add a new server with the URL: `http://YOUR_HOST_IP:8000`
 3. Claude Desktop will prompt for OAuth Client ID and Client Secret
-4. Complete the OAuth flow — the server currently auto-approves all registrations
+4. Enter the `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` values from your `.env`
 
-> **Security note:** The current OAuth implementation auto-approves all client registrations (Issue #7). On a trusted LAN this is acceptable. Client allowlist support is planned for a future release.
+> **Security note:** Set `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` in your `.env` file (both ≥32 characters) to disable Dynamic Client Registration and restrict access to the pre-registered client only. If neither is set, the server auto-approves all client registrations (suitable for trusted LANs only).
+>
+> Generate credentials:
+> ```bash
+> python -c "import secrets; print(secrets.token_urlsafe(48))"
+> ```
 
 ---
 
