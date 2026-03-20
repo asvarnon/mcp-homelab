@@ -619,6 +619,30 @@ systemctl status mcp-homelab
 systemctl status cloudflared
 ```
 
+### Edit `.env` and restart
+
+To change environment variables (API keys, OAuth allowlist, etc.):
+
+```bash
+ssh root@<SERVER_IP>
+nano /opt/mcp-homelab/.env          # or vi, your choice
+systemctl restart mcp-homelab
+journalctl -u mcp-homelab -n 10     # verify it started cleanly
+```
+
+> **Reminder:** Restarting wipes all in-memory OAuth tokens. Connected clients (Claude.ai, Desktop) will need to reconnect.
+
+### Edit `config.yaml` and restart
+
+To change host definitions, server settings, or other config:
+
+```bash
+ssh root@<SERVER_IP>
+nano /opt/mcp-homelab/config.yaml
+systemctl restart mcp-homelab
+journalctl -u mcp-homelab -n 10
+```
+
 ### Full redeploy
 
 To start from scratch, back up your config, reinstall, and restore:

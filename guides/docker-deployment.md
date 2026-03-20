@@ -74,6 +74,10 @@ PROXMOX_TOKEN_ID=user@pam!token-name
 PROXMOX_TOKEN_SECRET=your-secret-here
 OPNSENSE_API_KEY=your-key
 OPNSENSE_API_SECRET=your-secret
+
+# Restrict which clients can register via OAuth (recommended)
+# See DEPLOYMENT-GUIDE.md Phase 4.5 for details
+MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost
 ```
 
 ### 3. Start the container

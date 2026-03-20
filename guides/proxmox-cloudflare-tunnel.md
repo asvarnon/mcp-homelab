@@ -133,6 +133,17 @@ This creates the `mcp` service user, sets ownership, updates config.yaml for HTT
 
 > **LXC containers:** `install` auto-detects unprivileged containers via `systemd-detect-virt` and strips sandbox directives (`PrivateTmp`, `ProtectSystem`, etc.) that require mount namespaces. Look for the `⚠` marker in step 8 output. If detection fails, the full sandbox is preserved (safe default).
 
+### Lock down OAuth client registration (recommended)
+
+Add redirect URI allowlisting to restrict which clients can register:
+
+```bash
+echo 'MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost' >> /opt/mcp-homelab/.env
+sudo systemctl restart mcp-homelab
+```
+
+See [DEPLOYMENT-GUIDE.md Phase 4.5](../deploy/DEPLOYMENT-GUIDE.md) for additional options (IPv6 loopback, static clients).
+
 If you prefer to do each step manually (or need to customize), the manual steps are below.
 
 <details>

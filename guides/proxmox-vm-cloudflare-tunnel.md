@@ -155,6 +155,10 @@ PROXMOX_TOKEN_ID=user@pam!token-name
 PROXMOX_TOKEN_SECRET=your-secret-uuid
 OPNSENSE_API_KEY=your-key
 OPNSENSE_API_SECRET=your-secret
+
+# Restrict which clients can register via OAuth (recommended)
+# See DEPLOYMENT-GUIDE.md Phase 4.5 for details
+MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost
 ```
 
 ### Generate and distribute SSH keys
@@ -294,7 +298,7 @@ sudo systemctl start cloudflared
 curl -s https://mcp.your-domain.dev/.well-known/oauth-authorization-server | head -1
 ```
 
-You should get a `401` or OAuth metadata JSON — either confirms the tunnel is routing to the server.
+You should see JSON with `issuer`, `authorization_endpoint`, `token_endpoint`, etc. If you get a connection error or 404, check that `cloudflared` is running and routing to `localhost:8000`.
 
 ---
 
