@@ -69,7 +69,7 @@ Create a VM in Proxmox and install Ubuntu Server 24.04 LTS.
 1. Download the Ubuntu Server ISO to Proxmox (`local` storage → ISO Images)
 2. Create a VM via the Proxmox web UI or CLI:
    - **CPU:** 1 core (2 if budget allows)
-   - **Memory:** 1024 MB minimum (2048 MB recommended)
+   - **Memory:** 2048 MB minimum (Ubuntu Server installer needs ≥2 GB RAM)
    - **Disk:** 8 GB minimum
    - **Network:** bridge `vmbr0`, VLAN tag matching your management VLAN
 3. Boot the VM and install Ubuntu Server:
@@ -151,12 +151,18 @@ systemctl restart cloudflared
 
 ## Phase 3: Install mcp-homelab
 
-SSH to the server and install mcp-homelab from PyPI into a dedicated virtualenv.
+SSH to the server and run all Phase 3 commands as root.
+
+> **Ubuntu Server VM:** Root SSH login is disabled by default. SSH in as your admin user, then escalate:
+> ```bash
+> ssh <admin_user>@<SERVER_IP>
+> sudo su -
+> ```
+> All commands in Phase 3 assume a root shell.
 
 ### 3.1 Install system packages
 
 ```bash
-ssh root@<SERVER_IP>
 apt update && apt install -y python3 python3-venv python3-pip curl ca-certificates gnupg
 ```
 
@@ -262,29 +268,91 @@ EOF
 >   /etc/systemd/system/mcp-homelab.service
 > ```
 
-### 3.8 Start the service
+### 3.8 Enable the service (do not start yet)
 
 ```bash
 systemctl daemon-reload
 systemctl enable mcp-homelab
-systemctl start mcp-homelab
-sleep 2
-systemctl is-active mcp-homelab   # should print "active"
 ```
 
-The server is now running but has no SSH targets or API credentials — configure those in Phase 4.
+> **Do not start the service yet.** The scaffolded `config.yaml` has empty `hosts:` which YAML parses as `null`, causing a Pydantic validation error and a crash loop. Complete Phase 4 first to fill in configuration, then start the service in step 4.6.
 
 ---
 
 ## Phase 4: Post-Deploy Configuration
 
-After Phase 3, the server is running with template configuration files. These steps fill in your infrastructure details, SSH keys, and API credentials.
+After Phase 3, the service is installed but not yet running. These steps fill in your infrastructure details, SSH keys, and API credentials, then start the service.
 
 ### 4.1 Configure `config.yaml`
 
-The `mcp-homelab init` command created a template `config.yaml` in Phase 3. Edit it on your dev machine with all host entries, then transfer it to the server.
+Your workstation's `config.yaml` already has all the host entries, so copy it to the server first, then adapt it on the VM. **Do not edit your workstation copy** — it has your local SSH paths and users. You'll change those values on the server in step (c) below.
 
-Example `config.yaml`:
+> **SSH note:** On Ubuntu Server VMs, root SSH login is disabled. Use SCP to your admin user's home directory, then SSH in and `sudo su -` to move the file into place.
+
+#### (a) Transfer your workstation config to the server
+
+```bash
+# From your workstation — SCP to admin user's home
+scp config.yaml <admin_user>@<SERVER_IP>:~/config.yaml
+```
+
+SSH in and move it into place:
+
+```bash
+ssh <admin_user>@<SERVER_IP>
+sudo su -
+
+# SCP landed in the admin user's home, not /root/ — use the full path
+cp /home/<admin_user>/config.yaml /opt/mcp-homelab/config.yaml
+chown mcp:mcp /opt/mcp-homelab/config.yaml
+rm /home/<admin_user>/config.yaml
+```
+
+> **Why two steps?** Ubuntu Server VMs disable root SSH login, so `ssh root@` won't work. And `sudo` over non-interactive SSH requires passwordless sudo or an askpass helper — easier to just SSH in and escalate with `sudo su -`. Note that `~` in a root shell resolves to `/root/`, not the admin user's home — always use the full path `/home/<admin_user>/`.
+
+#### (b) Set the `server:` block for HTTP transport
+
+> **Critical:** The default transport is `stdio`, which works for local Claude Desktop but **exits immediately under systemd** (no stdin → EOF → clean exit, no error). You **must** set `transport: http` for a deployed server behind Cloudflare Tunnel.
+
+Edit the config on the server:
+
+```bash
+nano /opt/mcp-homelab/config.yaml
+```
+
+Set the `server:` block (uncomment host/port if needed):
+
+```yaml
+server:
+  transport: http                              # REQUIRED for systemd — stdio exits immediately
+  host: "0.0.0.0"                             # bind all interfaces (Cloudflare Tunnel connects locally)
+  port: 8000                                  # must match your Cloudflare Tunnel target (Phase 2: HTTP → localhost:8000)
+  public_url: "https://mcp.example.com"       # REQUIRED when host is 0.0.0.0 — your Cloudflare Tunnel hostname
+```
+
+**Common errors if this block is wrong:**
+
+| Config issue                                | Symptom                                                                |
+| ------------------------------------------- | ---------------------------------------------------------------------- |
+| `transport: stdio` (or missing)             | Service exits immediately, exit code 0, no error                       |
+| `public_url` missing with `host: "0.0.0.0"` | `Error: server.host is '0.0.0.0' ... but server.public_url is not set` |
+| Port doesn't match Cloudflare Tunnel        | Service starts, but Cloudflare can't connect                           |
+
+#### (c) Adapt SSH paths for the `mcp` service user
+
+Your workstation config has your personal SSH users and key paths (e.g., `ssh_user: ausvar`, `ssh_key_path: ~/.ssh/gamehost`). The deployed server runs as the `mcp` user with a single keypair generated in step 4.2. Update **every** host entry:
+
+| Field          | Workstation value (example)                | Server value                                      |
+| -------------- | ------------------------------------------ | ------------------------------------------------- |
+| `ssh_user`     | `ausvar`, `avadmin`, etc.                  | The user you deploy the public key to in step 4.3 |
+| `ssh_key_path` | `~/.ssh/gamehost`, `~/.ssh/id_ed25519_pve` | `~/.ssh/id_ed25519`                               |
+
+The `mcp` user has one key (`/home/mcp/.ssh/id_ed25519`), so **all** `ssh_key_path` values should be `~/.ssh/id_ed25519`. The `~` resolves to `/home/mcp/` when the service runs as user `mcp`.
+
+> **Do all edits now before SCP-ing again.** If you re-run the SCP transfer (step a), it overwrites the config — so make all changes on the server after the transfer is complete.
+
+#### Reference: example `config.yaml`
+
 ```yaml
 server:
   transport: http
@@ -299,7 +367,7 @@ hosts:
     vlan: 10
     ssh: true
     ssh_user: myuser
-    ssh_key_path: /home/mcp/.ssh/id_ed25519
+    ssh_key_path: ~/.ssh/id_ed25519           # mcp user's single keypair
     docker: true                              # set true if Docker is installed
     sudo_docker: true                         # set true if ssh_user needs sudo for docker
     description: Example Linux server
@@ -322,27 +390,14 @@ opnsense:
   verify_ssl: false
 ```
 
-Transfer to the server (base64 method — reliable across Windows/Linux):
-
-```powershell
-# PowerShell
-$b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("config.yaml"))
-ssh root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
-```
-
-```bash
-# Linux / macOS
-b64=$(base64 -w0 config.yaml 2>/dev/null || base64 config.yaml | tr -d '\n')
-ssh root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
-```
-
 ### 4.2 Generate SSH keypair for the `mcp` service user
 
 The `mcp` user needs SSH access to each host in `config.yaml`.
 
 ```bash
-# SSH to the server as root
-ssh root@<SERVER_IP>
+# SSH to the server and get a root shell
+ssh <admin_user>@<SERVER_IP>
+sudo su -
 
 # Create home directory (service user was created with --no-create-home)
 mkdir -p /home/mcp/.ssh
@@ -390,8 +445,9 @@ su -s /bin/bash - mcp -c "ssh -i /home/mcp/.ssh/id_ed25519 <ssh_user>@<host_ip> 
 The `.env` template was created by `mcp-homelab init` in Phase 3. Fill in your Proxmox API token and OPNsense API key.
 
 ```bash
-# SSH to the server as root
-ssh root@<SERVER_IP>
+# SSH to the server and get a root shell
+ssh <admin_user>@<SERVER_IP>
+sudo su -
 
 # Edit .env and fill in real values
 nano /opt/mcp-homelab/.env
@@ -428,16 +484,16 @@ When both are set, DCR is disabled — only the pre-registered client can authen
 
 If neither is set, the server falls back to open DCR (backward compatible, suitable for trusted LANs only).
 
-### 4.6 Restart the service
+### 4.6 Start the service
 
 ```bash
-systemctl restart mcp-homelab
+systemctl start mcp-homelab
 sleep 2
 systemctl is-active mcp-homelab   # should print "active"
 journalctl -u mcp-homelab -n 20   # check for errors
 ```
 
-> **Note:** Restarting the service **invalidates all OAuth tokens** (they're stored in memory). Any connected Claude.ai sessions will get 401 errors and must disconnect/reconnect the MCP server to trigger a fresh OAuth flow.
+> **Note:** If you need to restart the service later, `systemctl restart mcp-homelab` **invalidates all OAuth tokens** (they're stored in memory). Any connected Claude.ai sessions will get 401 errors and must disconnect/reconnect the MCP server to trigger a fresh OAuth flow.
 
 ---
 
@@ -471,11 +527,15 @@ From Claude.ai, ask the assistant to:
 journalctl -u mcp-homelab -n 50 --no-pager
 ```
 
-| Error                                    | Cause                                            | Fix                                                                         |
-| ---------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
-| `Missing required environment variables` | `.env` missing API credentials                   | Add credentials per step 4.4                                                |
-| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url` | Add `public_url` to config.yaml                                             |
-| `ModuleNotFoundError`                    | venv not activated or deps missing               | `systemctl cat mcp-homelab` — verify ExecStart uses `.venv/bin/mcp-homelab` |
+| Error                                                    | Cause                                                                                            | Fix                                                                                                               |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------- |
+| `hosts: Input should be a valid dictionary`              | Scaffolded `hosts:` has no entries (YAML parses as `null`)                                       | Fill in `config.yaml` per step 4.1 before starting the service                                                    |
+| `Missing required environment variables`                 | `.env` missing API credentials                                                                   | Add credentials per step 4.4                                                                                      |
+| `server.public_url is not set`                           | Config has `host: "0.0.0.0"` but no `public_url`                                                 | Add `public_url` to config.yaml                                                                                   |
+| `ModuleNotFoundError`                                    | venv not activated or deps missing                                                               | `systemctl cat mcp-homelab` — verify ExecStart uses `.venv/bin/mcp-homelab`                                       |
+| `No module named 'server'`                               | Old PyPI version (1.3.x) missing CLI serve command                                               | `pip install --upgrade mcp-homelab==<latest-dev-version>`                                                         |
+| Service starts then immediately stops (exit 0, no error) | `transport: stdio` in config (default) — systemd has no stdin, server gets EOF and exits cleanly | Set `transport: http` in `server:` block per step 4.1(b)                                                          |
+| `Config file not found: .../site-packages/config.yaml`   | `MCP_HOMELAB_CONFIG_DIR` not set, CLI looks in package dir                                       | Verify systemd unit has `Environment=MCP_HOMELAB_CONFIG_DIR=/opt/mcp-homelab`, or set the env var for manual runs |
 
 ### Claude.ai can't connect
 

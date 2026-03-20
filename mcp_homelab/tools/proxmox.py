@@ -510,7 +510,7 @@ async def create_vm(
     cores: int = 1,
     sockets: int = 1,
     cpu_type: str = "host",
-    memory_mb: int = 1024,
+    memory_mb: int = 2048,
     disk_gb: int = 16,
     storage: str | None = None,
     bridge: str | None = None,
@@ -530,7 +530,7 @@ async def create_vm(
         cores: Number of CPU cores.
         sockets: Number of CPU sockets.
         cpu_type: CPU model presented to the VM.
-        memory_mb: RAM in megabytes.
+        memory_mb: RAM in megabytes (2048 minimum for Ubuntu Server installer).
         disk_gb: Disk size in gigabytes.
         storage: Storage pool for the main disk. Defaults to proxmox.default_storage
             from config.yaml, or "local" if no config value is available.
