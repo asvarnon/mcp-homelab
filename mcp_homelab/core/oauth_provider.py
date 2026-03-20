@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from urllib.parse import urlparse
 
 from pydantic import AnyUrl
 
@@ -68,10 +69,13 @@ class FlexibleRedirectClient(OAuthClientInformationFull):
                 "redirect_uri is required for pre-registered client",
             )
         uri_str = str(redirect_uri)
+        parsed = urlparse(uri_str)
         if not (
-            uri_str.startswith("http://localhost")
-            or uri_str.startswith("http://127.0.0.1")
-            or uri_str.startswith("https://")
+            parsed.scheme == "https"
+            or (
+                parsed.scheme == "http"
+                and parsed.hostname in ("localhost", "127.0.0.1", "::1")
+            )
         ):
             raise InvalidRedirectUriError(
                 f"Redirect URI must be localhost or HTTPS, got: {uri_str}",
@@ -128,7 +132,7 @@ class HomelabOAuthProvider:
             response_types=["code"],
         )
         self._clients[client_id] = client
-        logger.info("Pre-registered static OAuth client: %s", client_id)
+        logger.info("Pre-registered static OAuth client")
 
     # ── Client registration (RFC 7591) ────────────────────────────────────
 

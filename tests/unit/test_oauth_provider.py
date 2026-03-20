@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -541,3 +542,50 @@ class TestFlexibleRedirectClient:
         )
         with pytest.raises(InvalidRedirectUriError, match="required"):
             client.validate_redirect_uri(None)
+
+    def test_rejects_localhost_subdomain(self) -> None:
+        """Regression: startswith('http://localhost') accepted localhost.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://localhost.evil.com/callback"))
+
+    def test_rejects_127_subdomain(self) -> None:
+        """Regression: startswith('http://127.0.0.1') accepted 127.0.0.1.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://127.0.0.1.evil.com/callback"))
+
+    def test_accepts_ipv6_loopback(self) -> None:
+        """RFC 8252 §8.3: ::1 is a valid loopback address."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://[::1]:8080/callback"))
+        assert "::1" in str(result)
+
+    def test_rejects_non_loopback_ip(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://192.168.1.100/callback"))
+
+
+class TestStaticClientLogging:
+    """Verify pre-registered client doesn't leak credentials to logs."""
+
+    def test_client_id_not_in_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        secret_id = "a" * 32
+        secret_pw = "b" * 32
+        with caplog.at_level(logging.INFO):
+            HomelabOAuthProvider(client_id=secret_id, client_secret=secret_pw)
+        assert secret_id not in caplog.text
+        assert "Pre-registered static OAuth client" in caplog.text
