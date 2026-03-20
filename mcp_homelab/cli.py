@@ -60,6 +60,13 @@ PROXMOX_TOKEN_SECRET=
 # --- OPNsense API ---
 OPNSENSE_API_KEY=
 OPNSENSE_API_SECRET=
+
+# --- MCP OAuth (HTTP transport only) ---
+# Pre-registered client credentials.  When both are set, Dynamic Client
+# Registration (DCR) is disabled and only this client can authenticate.
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+MCP_CLIENT_ID=
+MCP_CLIENT_SECRET=
 """
 
 

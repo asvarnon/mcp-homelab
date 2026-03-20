@@ -305,7 +305,7 @@ You should get a `401` or OAuth metadata JSON — either confirms the tunnel is 
 1. On your workstation, install mcp-homelab (just for the CLI): `pip install mcp-homelab`
 2. Run: `mcp-homelab setup client --url "https://mcp.your-domain.dev"`
 3. Restart Claude Desktop
-4. Complete the OAuth flow when prompted
+4. Complete the OAuth flow when prompted — if `MCP_CLIENT_ID` / `MCP_CLIENT_SECRET` are set on the server, enter those values in Claude Desktop's credential prompt
 
 ### Claude.ai (web/mobile)
 

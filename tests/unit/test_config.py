@@ -276,6 +276,83 @@ class TestValidateEnv:
         validate_env()  # Should not raise — opnsense not in config
 
 
+class TestValidateEnvOAuth:
+    """OAuth credential validation for HTTP transport."""
+
+    @staticmethod
+    def _write_http_config(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Write a minimal HTTP-transport config and point the env at it."""
+        from ruamel.yaml import YAML
+
+        config_data = {
+            "hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}},
+            "server": {
+                "transport": "http",
+                "host": "198.51.100.1",
+                "port": 8000,
+            },
+        }
+        yaml = YAML()
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+
+    def test_passes_with_both_oauth_vars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        validate_env()  # Should not raise
+
+    def test_passes_with_neither_oauth_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        validate_env()  # Should not raise — DCR fallback
+
+    def test_fails_with_only_client_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        with pytest.raises(EnvironmentError, match="both be set"):
+            validate_env()
+
+    def test_fails_with_only_client_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        with pytest.raises(EnvironmentError, match="both be set"):
+            validate_env()
+
+    def test_fails_with_short_client_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "short")
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        with pytest.raises(EnvironmentError, match="at least 32 characters"):
+            validate_env()
+
+    def test_fails_with_short_client_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "short")
+        with pytest.raises(EnvironmentError, match="at least 32 characters"):
+            validate_env()
+
+
 # ===========================================================================
 # Integration availability helpers
 # ===========================================================================
