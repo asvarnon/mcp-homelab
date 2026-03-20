@@ -5,12 +5,15 @@ in-memory storage suited for a single-user homelab. All state (registered
 clients, auth codes, tokens) lives in memory and is cleared on restart.
 
 Security controls:
+- Admin login gate: ``authorize()`` redirects to a password-protected
+  login page instead of auto-approving.  Set ``MCP_ADMIN_PASSWORD_HASH``
+  to enable (required in HTTP mode).
 - Max registered clients cap (prevents DoS via unbounded DCR)
-- Max outstanding auth codes cap
+- Max outstanding auth codes and pending sessions caps
 - Auth codes are single-use and time-limited (5 min)
 - Access tokens expire after 1 hour
 - Refresh tokens expire after 30 days with rotation on use
-- Token entropy: 256 bits (auth codes), 384 bits (access/refresh)
+- Token entropy: 256 bits (auth codes / session tokens), 384 bits (access/refresh)
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ from __future__ import annotations
 import logging
 import secrets
 import time
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 from pydantic import AnyUrl
@@ -42,11 +46,26 @@ logger = logging.getLogger(__name__)
 # ── Limits ─────────────────────────────────────────────────────────────────
 MAX_CLIENTS: int = 5
 MAX_AUTH_CODES: int = 50
+MAX_PENDING_SESSIONS: int = 50
 
 # ── Token lifetimes (seconds) ─────────────────────────────────────────────
-AUTH_CODE_TTL: int = 5 * 60            # 5 minutes
-ACCESS_TOKEN_TTL: int = 60 * 60        # 1 hour
+AUTH_CODE_TTL: int = 5 * 60              # 5 minutes
+ACCESS_TOKEN_TTL: int = 60 * 60          # 1 hour
 REFRESH_TOKEN_TTL: int = 30 * 24 * 3600  # 30 days
+PENDING_SESSION_TTL: int = 10 * 60       # 10 minutes
+
+
+# ── Pending session (pre-login) ────────────────────────────────────────────
+
+@dataclass
+class PendingSession:
+    """State stored between ``authorize()`` and successful login."""
+    session_token: str
+    client: OAuthClientInformationFull
+    params: AuthorizationParams
+    client_name: str
+    redirect_domain: str
+    expires_at: float
 
 
 class FlexibleRedirectClient(OAuthClientInformationFull):
@@ -86,9 +105,13 @@ class FlexibleRedirectClient(OAuthClientInformationFull):
 class HomelabOAuthProvider:
     """Single-user, in-memory OAuth 2.1 authorization server.
 
-    Implements ``OAuthAuthorizationServerProvider`` with auto-approve
-    authorization (no consent screen). All tokens are cleared on process
-    restart — this is a feature, not a bug, for a homelab deployment.
+    Implements ``OAuthAuthorizationServerProvider`` with an admin login
+    gate: ``authorize()`` stores a pending session and returns a redirect
+    to ``/login`` instead of auto-approving. The admin must enter a
+    password (bcrypt-verified) before the authorization code is issued.
+
+    All tokens are cleared on process restart — this is a feature, not
+    a bug, for a homelab deployment.
 
     When *client_id* and *client_secret* are provided, the provider starts
     with a pre-registered client. Dynamic Client Registration remains
@@ -100,6 +123,7 @@ class HomelabOAuthProvider:
         client_id: str | None = None,
         client_secret: str | None = None,
         allowed_redirect_origins: list[str] | None = None,
+        login_url: str | None = None,
     ) -> None:
         self._clients: dict[str, OAuthClientInformationFull] = {}
         self._auth_codes: dict[str, AuthorizationCode] = {}
@@ -107,8 +131,10 @@ class HomelabOAuthProvider:
         self._refresh_tokens: dict[str, RefreshToken] = {}
         # Map access token → refresh token for paired revocation.
         self._token_pairs: dict[str, str] = {}
+        self._pending_sessions: dict[str, PendingSession] = {}
 
         self._allowed_redirect_origins = allowed_redirect_origins or None
+        self._login_url = login_url  # e.g. "https://mcp.example.com/login"
 
         if client_id and client_secret:
             self._register_static_client(client_id, client_secret)
@@ -173,7 +199,7 @@ class HomelabOAuthProvider:
             client_info.client_name or "unnamed",
         )
 
-    # ── Authorization (auto-approve) ──────────────────────────────────────
+    # ── Authorization (login gate) ───────────────────────────────────────
 
     async def authorize(
         self,
@@ -181,7 +207,72 @@ class HomelabOAuthProvider:
         params: AuthorizationParams,
     ) -> str:
         self._evict_expired_codes()
+        self._evict_expired_sessions()
 
+        # When no login URL is configured, fall back to auto-approve
+        # (stdio / local dev mode where auth is cosmetic).
+        if self._login_url is None:
+            return self._issue_auth_code(client, params)
+
+        if len(self._pending_sessions) >= MAX_PENDING_SESSIONS:
+            logger.warning(
+                "Pending session cap reached (%d); rejecting",
+                MAX_PENDING_SESSIONS,
+            )
+            return construct_redirect_uri(
+                str(params.redirect_uri),
+                error="server_error",
+                error_description="Too many pending authorization requests",
+                state=params.state,
+            )
+
+        session_token = secrets.token_urlsafe(32)
+
+        # Extract display info for the login page
+        client_name = client.client_name or client.client_id or "Unknown client"
+        redirect_domain = urlparse(str(params.redirect_uri)).netloc or "unknown"
+
+        self._pending_sessions[session_token] = PendingSession(
+            session_token=session_token,
+            client=client,
+            params=params,
+            client_name=client_name,
+            redirect_domain=redirect_domain,
+            expires_at=time.time() + PENDING_SESSION_TTL,
+        )
+
+        logger.info(
+            "Created pending session for client %s → %s",
+            client.client_id,
+            redirect_domain,
+        )
+        return f"{self._login_url}?session={session_token}"
+
+    def get_pending_session(self, session_token: str) -> PendingSession | None:
+        """Look up a pending session by token, returning None if expired."""
+        self._evict_expired_sessions()
+        return self._pending_sessions.get(session_token)
+
+    def complete_authorization(self, session_token: str) -> str | None:
+        """Complete a pending authorization after successful login.
+
+        Consumes the pending session, issues an auth code, and returns
+        the redirect URI with the code.  Returns ``None`` if the session
+        is expired or invalid.
+        """
+        session = self._pending_sessions.pop(session_token, None)
+        if session is None:
+            return None
+        if session.expires_at < time.time():
+            return None
+        return self._issue_auth_code(session.client, session.params)
+
+    def _issue_auth_code(
+        self,
+        client: OAuthClientInformationFull,
+        params: AuthorizationParams,
+    ) -> str:
+        """Generate an auth code and return the redirect URI."""
         if len(self._auth_codes) >= MAX_AUTH_CODES:
             logger.warning("Auth code cap reached (%d); rejecting", MAX_AUTH_CODES)
             return construct_redirect_uri(
@@ -191,7 +282,6 @@ class HomelabOAuthProvider:
                 state=params.state,
             )
 
-        # 256-bit code (spec requires ≥128 bits)
         code = secrets.token_urlsafe(32)
         now = time.time()
 
@@ -380,6 +470,16 @@ class HomelabOAuthProvider:
         ]
         for code in expired:
             del self._auth_codes[code]
+
+    def _evict_expired_sessions(self) -> None:
+        """Remove expired pending sessions."""
+        now = time.time()
+        expired = [
+            token for token, session in self._pending_sessions.items()
+            if session.expires_at < now
+        ]
+        for token in expired:
+            del self._pending_sessions[token]
 
     def _validate_redirect_uris(self, redirect_uris: list[AnyUrl]) -> None:
         """Raise RegistrationError if any redirect URI origin is not allowlisted."""

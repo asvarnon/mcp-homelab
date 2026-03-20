@@ -700,3 +700,139 @@ class TestStaticClientLogging:
             HomelabOAuthProvider(client_id=secret_id, client_secret=secret_pw)
         assert secret_id not in caplog.text
         assert "Pre-registered static OAuth client" in caplog.text
+
+
+# ── Pending Session (Login Gate) ─────────────────────────────────────────
+
+class TestPendingSessionFlow:
+    """Tests for authorize() with login_url set (admin login gate)."""
+
+    async def test_authorize_redirects_to_login(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+
+        assert redirect_url.startswith("https://mcp.example.com/login?session=")
+        assert "code=" not in redirect_url
+
+    async def test_authorize_creates_pending_session(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        session = provider.get_pending_session(token)
+        assert session is not None
+        assert session.client_name == "Test Client"
+        assert session.redirect_domain == "localhost:3000"
+
+    async def test_complete_authorization_issues_code(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        result = provider.complete_authorization(token)
+
+        assert result is not None
+        assert "code=" in result
+        assert "state=test-state" in result
+
+    async def test_complete_authorization_consumes_session(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        provider.complete_authorization(token)
+
+        # Second call should return None — session consumed
+        assert provider.complete_authorization(token) is None
+
+    async def test_expired_session_returns_none(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        # Manually expire the session
+        provider._pending_sessions[token].expires_at = time.time() - 1
+
+        assert provider.get_pending_session(token) is None
+
+    async def test_complete_expired_session_returns_none(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        # Expire after get_pending_session but before complete
+        provider._pending_sessions[token].expires_at = time.time() - 1
+
+        assert provider.complete_authorization(token) is None
+
+    async def test_session_cap_enforcement(self) -> None:
+        from mcp_homelab.core.oauth_provider import MAX_PENDING_SESSIONS
+
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        for _ in range(MAX_PENDING_SESSIONS):
+            await provider.authorize(client, params)
+
+        # One more should return error redirect
+        redirect_url = await provider.authorize(client, params)
+        assert "error=server_error" in redirect_url
+
+    async def test_no_login_url_auto_approves(self) -> None:
+        """Without login_url, authorize() auto-approves (backward compat)."""
+        provider = HomelabOAuthProvider()
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+
+        assert "code=" in redirect_url
+        assert len(provider._pending_sessions) == 0
+
+    async def test_full_gated_flow(self) -> None:
+        """End-to-end: authorize → pending → complete → exchange tokens."""
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        login_redirect = await provider.authorize(client, params)
+        token = login_redirect.split("session=")[1]
+
+        code_redirect = provider.complete_authorization(token)
+        assert code_redirect is not None
+        code = _extract_code(code_redirect)
+
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        oauth_token = await provider.exchange_authorization_code(client, auth_code)
+        assert oauth_token.access_token
+        assert oauth_token.refresh_token
