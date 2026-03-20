@@ -47,17 +47,16 @@ Claude.ai / Mobile
 
 ### Credentials (gather before starting)
 
-| Credential                  | Where to get it                                                    | Used for                                  |
-| --------------------------- | ------------------------------------------------------------------ | ----------------------------------------- |
-| **Cloudflare Tunnel token** | Zero Trust → Tunnels → your tunnel → Configure → Install connector | `CF_TUNNEL_TOKEN` env var for `deploy.py` |
-| **Proxmox API token**       | Datacenter → Permissions → API Tokens → Add                        | `.env` on the server                      |
-| **OPNsense API key/secret** | System → Access → Users → API Keys                                 | `.env` on the server                      |
+| Credential                  | Where to get it                                                    | Used for                                 |
+| --------------------------- | ------------------------------------------------------------------ | ---------------------------------------- |
+| **Cloudflare Tunnel token** | Zero Trust → Tunnels → your tunnel → Configure → Install connector | `cloudflared service install` in Phase 3 |
+| **Proxmox API token**       | Datacenter → Permissions → API Tokens → Add                        | `.env` on the server                     |
+| **OPNsense API key/secret** | System → Access → Users → API Keys                                 | `.env` on the server                     |
 
 ### Developer machine
 
 - **Python 3.10+**
 - **SSH client** (OpenSSH)
-- **Git** with access to the mcp-homelab repository
 
 ---
 
@@ -116,7 +115,7 @@ pct exec <VMID> -- ping -c1 8.8.8.8
 3. Click **Create a tunnel** → choose **Cloudflared** connector type
 4. Name the tunnel (e.g., `mcp-homelab`)
 5. On the connector install page, **copy the token** from the install command (the base64 blob after `cloudflared service install`)
-6. Skip the actual install — `deploy.py` handles that
+6. Skip the actual install — you'll install cloudflared manually in Phase 3
 7. Click **Next** → add a **Public Hostname**:
    - **Subdomain:** `mcp` (or your preference)
    - **Domain:** select your domain
@@ -150,107 +149,140 @@ systemctl restart cloudflared
 
 ---
 
-## Phase 3: Run the Deploy Script
+## Phase 3: Install mcp-homelab
 
-The deploy script automates: system package installation, cloudflared, repo clone, Python venv, systemd services, and Cloudflare Tunnel setup.
+SSH to the server and install mcp-homelab from PyPI into a dedicated virtualenv.
 
-### Standard deploy (VM or LXC with SSH access)
-
-If you can already SSH to the server (e.g., a VM where you enabled SSH during Ubuntu install), this is all you need:
+### 3.1 Install system packages
 
 ```bash
-export CF_TUNNEL_TOKEN="eyJhIjoi..."
-
-python deploy/deploy.py \
-  --host <SERVER_IP> \
-  --public-url "https://mcp.example.com"
+ssh root@<SERVER_IP>
+apt update && apt install -y python3 python3-venv python3-pip curl ca-certificates gnupg
 ```
 
-```powershell
-# Windows PowerShell
-$env:CF_TUNNEL_TOKEN = "eyJhIjoi..."
+### 3.2 Install cloudflared
 
-python deploy/deploy.py `
-  --host <SERVER_IP> `
-  --public-url "https://mcp.example.com"
-```
-
-### First deploy to LXC (with Proxmox bootstrap)
-
-For a fresh LXC container without SSH, use `--pve-host` to bootstrap SSH access via `pct exec`:
+Skip this if you've already installed the Cloudflare Tunnel connector.
 
 ```bash
-export CF_TUNNEL_TOKEN="eyJhIjoi..."
+# Add Cloudflare GPG key and repository
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | \
+  gpg --dearmor -o /usr/share/keyrings/cloudflare-main.gpg
+echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs) main" | \
+  tee /etc/apt/sources.list.d/cloudflared.list
 
-python deploy/deploy.py \
-  --host <SERVER_IP> \
-  --public-url "https://mcp.example.com" \
-  --pve-host <PVE_IP> \
-  --pve-user <PVE_SSH_USER> \
-  --pve-key ~/.ssh/<PVE_KEY> \
-  --vmid <VMID>
+apt update && apt install -y cloudflared
+
+# Install the tunnel service (pass token via stdin to avoid shell history exposure)
+echo '<YOUR_TUNNEL_TOKEN>' | cloudflared service install "$(cat /dev/stdin)"
+systemctl enable cloudflared
+systemctl start cloudflared
 ```
 
-```powershell
-# Windows PowerShell
-$env:CF_TUNNEL_TOKEN = "eyJhIjoi..."
+> **LXC only:** If running in an LXC container, force HTTP/2 to avoid QUIC failures:
+> ```bash
+> sed -i 's|--no-autoupdate tunnel run|--no-autoupdate --protocol http2 tunnel run|' \
+>   /etc/systemd/system/cloudflared.service
+> systemctl daemon-reload && systemctl restart cloudflared
+> ```
 
-python deploy/deploy.py `
-  --host <SERVER_IP> `
-  --public-url "https://mcp.example.com" `
-  --pve-host <PVE_IP> `
-  --pve-user <PVE_SSH_USER> `
-  --pve-key "$env:USERPROFILE\.ssh\<PVE_KEY>" `
-  --vmid <VMID>
-```
-
-### Subsequent deploys
-
-Once SSH works, just re-run without the `--pve-*` flags:
+### 3.3 Create the install directory and virtualenv
 
 ```bash
-python deploy/deploy.py \
-  --host <SERVER_IP> \
-  --public-url "https://mcp.example.com"
+mkdir -p /opt/mcp-homelab
+python3 -m venv /opt/mcp-homelab/.venv
 ```
 
-### What deploy.py does (13 steps, 14 with bootstrap)
+### 3.4 Install mcp-homelab from PyPI
 
-| Step | Action                                  | Notes                                                                    |
-| ---- | --------------------------------------- | ------------------------------------------------------------------------ |
-| 1    | Generate/locate SSH bootstrap key       | `~/.ssh/mcp-server-bootstrap`                                            |
-| 2*   | Bootstrap SSH in LXC via PVE `pct exec` | Only with `--pve-host` (LXC only). Installs openssh-server + injects key |
-| 3    | Verify SSH connectivity                 | Runs `hostname` on target                                                |
-| 4    | Install system packages                 | python3, git, curl, gnupg, ca-certificates                               |
-| 5    | Install cloudflared                     | Via Cloudflare apt repo                                                  |
-| 6    | Create `mcp` service user               | System user for running the service                                      |
-| 7    | Clone/update repository                 | From GitHub, specified branch                                            |
-| 8    | Create venv + install dependencies      | `/opt/mcp-homelab/.venv`                                                 |
-| 9    | Write `config.yaml`                     | Minimal: `transport: http`, `host: 0.0.0.0`, `public_url`, `hosts: {}`   |
-| 10   | Write `.env`                            | Minimal: `MCP_HOMELAB_CONFIG_DIR` only                                   |
-| 11   | Install systemd unit                    | `mcp-homelab.service` → enabled                                          |
-| 12   | Start service                           | `systemctl restart mcp-homelab` + verify active                          |
-| 13   | Install cloudflared tunnel              | Token via stdin, HTTP/2 patch applied                                    |
+```bash
+/opt/mcp-homelab/.venv/bin/pip install mcp-homelab
+```
 
-### What deploy.py does NOT do
+### 3.5 Scaffold configuration templates
 
-These are completed manually in Phase 4:
+```bash
+cd /opt/mcp-homelab
+.venv/bin/mcp-homelab init
+```
 
-- ❌ Write host entries to `config.yaml` (SSH targets)
-- ❌ Generate SSH keypair for the `mcp` service user
-- ❌ Deploy `mcp` public key to infrastructure hosts
-- ❌ Write Proxmox/OPNsense API credentials to `.env`
-- ❌ Verify end-to-end tool connectivity
+This creates `config.yaml` and `.env` templates in `/opt/mcp-homelab/`. You'll fill these in during Phase 4.
+
+### 3.6 Create the service user and set permissions
+
+```bash
+useradd --system --no-create-home --shell /usr/sbin/nologin mcp
+chown -R mcp:mcp /opt/mcp-homelab
+chmod 400 /opt/mcp-homelab/.env
+```
+
+### 3.7 Install the systemd service
+
+Create the service unit file:
+
+```bash
+cat > /etc/systemd/system/mcp-homelab.service << 'EOF'
+[Unit]
+Description=mcp-homelab MCP server
+After=network.target
+
+[Service]
+Type=simple
+User=mcp
+Group=mcp
+WorkingDirectory=/opt/mcp-homelab
+Environment=MCP_HOMELAB_CONFIG_DIR=/opt/mcp-homelab
+EnvironmentFile=/opt/mcp-homelab/.env
+ExecStart=/opt/mcp-homelab/.venv/bin/mcp-homelab serve
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+ReadWritePaths=/opt/mcp-homelab
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+> **Why `MCP_HOMELAB_CONFIG_DIR`?** When installed via pip, the `mcp-homelab` binary lives in the venv's `bin/` — not in `/opt/mcp-homelab`. This env var tells the server where to find `config.yaml` and `.env`.
+
+> **LXC only:** Strip namespace sandbox directives that fail in unprivileged containers:
+> ```bash
+> sed -i '/^PrivateTmp\|^PrivateDevices\|^ProtectSystem\|^ProtectHome\|^ProtectKernelTunables\|^ProtectKernelModules\|^ProtectControlGroups\|^ReadWritePaths/d' \
+>   /etc/systemd/system/mcp-homelab.service
+> ```
+
+### 3.8 Start the service
+
+```bash
+systemctl daemon-reload
+systemctl enable mcp-homelab
+systemctl start mcp-homelab
+sleep 2
+systemctl is-active mcp-homelab   # should print "active"
+```
+
+The server is now running but has no SSH targets or API credentials — configure those in Phase 4.
 
 ---
 
 ## Phase 4: Post-Deploy Configuration
 
-After `deploy.py` completes, the server is running but has no SSH targets or API credentials. These steps configure it for your infrastructure.
+After Phase 3, the server is running with template configuration files. These steps fill in your infrastructure details, SSH keys, and API credentials.
 
-### 4.1 Write the full `config.yaml`
+### 4.1 Configure `config.yaml`
 
-Create a `config.yaml` on your dev machine with all host entries, then transfer it to the server.
+The `mcp-homelab init` command created a template `config.yaml` in Phase 3. Edit it on your dev machine with all host entries, then transfer it to the server.
 
 Example `config.yaml`:
 ```yaml
@@ -295,13 +327,13 @@ Transfer to the server (base64 method — reliable across Windows/Linux):
 ```powershell
 # PowerShell
 $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("config.yaml"))
-ssh -i "$env:USERPROFILE\.ssh\mcp-server-bootstrap" root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
+ssh root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
 ```
 
 ```bash
 # Linux / macOS
 b64=$(base64 -w0 config.yaml 2>/dev/null || base64 config.yaml | tr -d '\n')
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
+ssh root@<SERVER_IP> "echo $b64 | base64 -d > /opt/mcp-homelab/config.yaml && chown mcp:mcp /opt/mcp-homelab/config.yaml"
 ```
 
 ### 4.2 Generate SSH keypair for the `mcp` service user
@@ -310,9 +342,9 @@ The `mcp` user needs SSH access to each host in `config.yaml`.
 
 ```bash
 # SSH to the server as root
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
+ssh root@<SERVER_IP>
 
-# Create home directory (deploy.py uses --no-create-home)
+# Create home directory (service user was created with --no-create-home)
 mkdir -p /home/mcp/.ssh
 chown -R mcp:mcp /home/mcp
 chmod 700 /home/mcp/.ssh
@@ -349,19 +381,22 @@ ssh <ssh_user>@<host_ip> 'mkdir -p ~/.ssh && chmod 700 ~/.ssh && echo "<pubkey>"
 **Verify connectivity** from the server:
 ```bash
 # SSH to server, then test as mcp user
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
+ssh root@<SERVER_IP>
 su -s /bin/bash - mcp -c "ssh -i /home/mcp/.ssh/id_ed25519 <ssh_user>@<host_ip> hostname"
 ```
 
-### 4.4 Add API credentials to `.env`
+### 4.4 Fill in API credentials in `.env`
 
-Add your Proxmox API token and OPNsense API key to the `.env` file on the server.
+The `.env` template was created by `mcp-homelab init` in Phase 3. Fill in your Proxmox API token and OPNsense API key.
 
 ```bash
 # SSH to the server as root
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
+ssh root@<SERVER_IP>
 
-# Append credentials (use your actual values)
+# Edit .env and fill in real values
+nano /opt/mcp-homelab/.env
+
+# Or append credentials directly (use your actual values)
 cat >> /opt/mcp-homelab/.env << 'EOF'
 PROXMOX_TOKEN_ID=admin@pam!mcp-homelab
 PROXMOX_TOKEN_SECRET=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
@@ -436,11 +471,11 @@ From Claude.ai, ask the assistant to:
 journalctl -u mcp-homelab -n 50 --no-pager
 ```
 
-| Error                                    | Cause                                            | Fix                                                                    |
-| ---------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------- |
-| `Missing required environment variables` | `.env` missing API credentials                   | Add credentials per step 4.4                                           |
-| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url` | Add `public_url` to config.yaml                                        |
-| `ModuleNotFoundError`                    | venv not activated or deps missing               | `systemctl cat mcp-homelab` — verify ExecStart uses `.venv/bin/python` |
+| Error                                    | Cause                                            | Fix                                                                         |
+| ---------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| `Missing required environment variables` | `.env` missing API credentials                   | Add credentials per step 4.4                                                |
+| `server.public_url is not set`           | Config has `host: "0.0.0.0"` but no `public_url` | Add `public_url` to config.yaml                                             |
+| `ModuleNotFoundError`                    | venv not activated or deps missing               | `systemctl cat mcp-homelab` — verify ExecStart uses `.venv/bin/mcp-homelab` |
 
 ### Claude.ai can't connect
 
@@ -479,10 +514,8 @@ journalctl -u cloudflared -n 50 --no-pager
 ### Update the server code
 
 ```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP>
-cd /opt/mcp-homelab
-git pull
-.venv/bin/pip install -r requirements.txt   # if deps changed
+ssh root@<SERVER_IP>
+/opt/mcp-homelab/.venv/bin/pip install --upgrade mcp-homelab
 systemctl restart mcp-homelab
 ```
 
@@ -508,18 +541,23 @@ systemctl status cloudflared
 
 ### Full redeploy
 
-Re-run `deploy.py` — it's idempotent. It will `git pull` instead of re-cloning, reinstall deps, and restart services. Note: this **overwrites** `config.yaml` and `.env` with minimal versions. Back up your config first:
+To start from scratch, back up your config, reinstall, and restore:
 
 ```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> \
-  "cp /opt/mcp-homelab/config.yaml /opt/mcp-homelab/config.yaml.bak && cp /opt/mcp-homelab/.env /opt/mcp-homelab/.env.bak"
-```
+ssh root@<SERVER_IP>
 
-Then re-run `deploy.py` and restore your config:
+# Back up config
+cp /opt/mcp-homelab/config.yaml /opt/mcp-homelab/config.yaml.bak
+cp /opt/mcp-homelab/.env /opt/mcp-homelab/.env.bak
 
-```bash
-ssh -i ~/.ssh/mcp-server-bootstrap root@<SERVER_IP> \
-  "cp /opt/mcp-homelab/config.yaml.bak /opt/mcp-homelab/config.yaml && cp /opt/mcp-homelab/.env.bak /opt/mcp-homelab/.env && systemctl restart mcp-homelab"
+# Reinstall
+/opt/mcp-homelab/.venv/bin/pip install --force-reinstall mcp-homelab
+
+# Restore config and restart
+cp /opt/mcp-homelab/config.yaml.bak /opt/mcp-homelab/config.yaml
+cp /opt/mcp-homelab/.env.bak /opt/mcp-homelab/.env
+chown mcp:mcp /opt/mcp-homelab/config.yaml /opt/mcp-homelab/.env
+systemctl restart mcp-homelab
 ```
 
 ---
