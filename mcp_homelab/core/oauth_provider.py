@@ -190,6 +190,11 @@ class HomelabOAuthProvider:
                 error="invalid_client_metadata",
                 error_description="client_id is required",
             )
+        if client_info.client_id in self._clients:
+            raise RegistrationError(
+                error="invalid_client_metadata",
+                error_description="client_id is already registered",
+            )
         if self._allowed_redirect_origins is not None:
             self._validate_redirect_uris(client_info.redirect_uris or [])
         self._clients[client_info.client_id] = client_info

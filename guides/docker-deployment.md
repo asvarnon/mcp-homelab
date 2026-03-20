@@ -177,7 +177,7 @@ Once the container is running:
 3. Claude Desktop will prompt for OAuth Client ID and Client Secret
 4. Enter the `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` values from your `.env`
 
-> **Security note:** Set `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` in your `.env` file (both ≥32 characters) to disable Dynamic Client Registration and restrict access to the pre-registered client only. If neither is set, the server auto-approves all client registrations (suitable for trusted LANs only).
+> **Security note:** Setting `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` in your `.env` file (both ≥32 characters) adds a pre-registered static OAuth client. Dynamic Client Registration (DCR) remains enabled; to restrict which clients can register, set `MCP_ALLOWED_REDIRECT_ORIGINS` to a comma-separated list of trusted redirect origins. If no static client or origin restrictions are configured, the server auto-approves all client registrations (suitable for trusted LANs only).
 >
 > Generate credentials:
 > ```bash

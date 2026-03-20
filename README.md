@@ -202,9 +202,9 @@ MCP_CLIENT_ID=<generated-value>
 MCP_CLIENT_SECRET=<generated-value>
 ```
 
-When both are set, DCR is disabled — only the pre-registered client can authenticate. When connecting from Claude Desktop, enter these values in the OAuth Client ID / Client Secret prompt.
+When both are set, this static client is pre-registered alongside Dynamic Client Registration (DCR). To restrict which clients can register dynamically, set `MCP_ALLOWED_REDIRECT_ORIGINS` (comma-separated origins). When connecting from Claude Desktop, enter these values in the OAuth Client ID / Client Secret prompt.
 
-If neither is set, the server falls back to open DCR (backward compatible).
+If neither is set, the server uses open DCR (backward compatible, suitable for trusted LANs).
 
 ### Hosted mode (multi-client)
 

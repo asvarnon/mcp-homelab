@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import bcrypt
 import pytest
-from starlette.testclient import TestClient
 
 from mcp_homelab.core.login import (
     LoginHandler,
@@ -181,6 +180,12 @@ class TestRateLimiter:
         rl = RateLimiter()
         request = _make_request(client_ip="127.0.0.1", cf_ip="203.0.113.5")
         assert rl.get_client_ip(request) == "203.0.113.5"
+
+    def test_cf_header_ignored_from_non_loopback(self) -> None:
+        """CF-Connecting-IP must be ignored when peer is not loopback."""
+        rl = RateLimiter()
+        request = _make_request(client_ip="192.168.1.50", cf_ip="203.0.113.5")
+        assert rl.get_client_ip(request) == "192.168.1.50"
 
     def test_fallback_to_client_host(self) -> None:
         rl = RateLimiter()

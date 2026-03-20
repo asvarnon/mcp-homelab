@@ -167,7 +167,7 @@ def _update_server_config(config_path: Path, public_url: str) -> None:
 def _encrypt_credentials(install_path: Path) -> list[str]:
     """Encrypt .env secrets as systemd credentials.
 
-    Reads the 4 API secrets from .env, encrypts each using
+    Reads all configured credential keys from .env, encrypts each using
     ``systemd-creds encrypt --with-key=auto`` (TPM2 with host-key
     fallback), and writes encrypted files to ``/etc/credstore.encrypted/``.
 

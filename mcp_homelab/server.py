@@ -284,8 +284,8 @@ def start_server() -> None:
         validate_env,
     )
 
-    load_env()
     load_from_credentials_dir()
+    load_env()
     validate_env()
 
     config = load_config()

@@ -20,9 +20,8 @@ import ipaddress
 import logging
 import re
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import urlparse
 
 import bcrypt
 from starlette.requests import Request
@@ -73,9 +72,10 @@ class _IpRecord:
 class RateLimiter:
     """Per-IP rate limiter for login attempts.
 
-    Uses ``CF-Connecting-IP`` header when present (cloudflared sends all
-    requests from ``127.0.0.1``, so the real client IP is only available
-    via this header).  Falls back to ``request.client.host``.
+    Trusts the ``CF-Connecting-IP`` header only when the immediate peer
+    is a loopback address (``127.0.0.1`` / ``::1``), i.e. the request
+    arrived through cloudflared.  Direct (non-loopback) clients cannot
+    spoof the header to bypass rate limiting.
 
     Note: Restarting the server clears all rate-limit state.  This is
     acceptable for a single-user homelab deployment.
@@ -93,21 +93,23 @@ class RateLimiter:
     def get_client_ip(self, request: Request) -> str:
         """Extract the real client IP from the request.
 
-        Validates ``CF-Connecting-IP`` with ``ipaddress`` to reject
-        spoofed non-IP values that could pollute the rate-limit table.
+        Only trusts ``CF-Connecting-IP`` when the peer is loopback
+        (cloudflared).  Validates the header with ``ipaddress`` to
+        reject spoofed non-IP values.
         """
-        cf_ip = request.headers.get("CF-Connecting-IP")
-        if cf_ip:
-            cf_ip = cf_ip.strip()
-            try:
-                ipaddress.ip_address(cf_ip)
-                return cf_ip
-            except ValueError:
-                # Spoofed or malformed — fall through to socket IP
-                pass
-        if request.client:
-            return request.client.host
-        return "unknown"
+        peer_ip = request.client.host if request.client else "unknown"
+        # Only trust CF-Connecting-IP when the peer is a loopback address
+        # (i.e., the request came through cloudflared, not directly).
+        if peer_ip in ("127.0.0.1", "::1"):
+            cf_ip = request.headers.get("CF-Connecting-IP")
+            if cf_ip:
+                cf_ip = cf_ip.strip()
+                try:
+                    ipaddress.ip_address(cf_ip)
+                    return cf_ip
+                except ValueError:
+                    pass
+        return peer_ip
 
     def is_rate_limited(self, ip: str) -> bool:
         """Return True if *ip* has exceeded the attempt limit."""
