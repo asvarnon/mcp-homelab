@@ -25,17 +25,78 @@ By default, the OAuth `authorize` endpoint auto-approves every request. This is 
 
 ### How to fix: Set `MCP_ADMIN_PASSWORD_HASH`
 
-Generate a bcrypt hash of your admin password and add it to your `.env` file:
+#### 1. Generate the bcrypt hash
+
+**Option A — Interactive prompt (recommended for local use):**
 
 ```bash
-# Generate a hash (run on any machine with Python + bcrypt):
+# Run on any machine with Python + bcrypt installed:
 python -c "import bcrypt; print(bcrypt.hashpw(input('Password: ').encode(), bcrypt.gensalt()).decode())"
+```
 
-# Add to your .env file on the server:
+**Option B — Non-interactive (good for scripting or remote SSH):**
+
+```bash
+# Directly on the server:
+/opt/mcp-homelab/.venv/bin/python -c "import bcrypt; print(bcrypt.hashpw(b'YourPassword', bcrypt.gensalt()).decode())"
+```
+
+> **⚠️ PowerShell + SSH escaping issue:** If you're running the hash command over SSH
+> from a Windows PowerShell session, nested quotes and `$` signs in the bcrypt output
+> will be mangled. The simplest workaround is to base64-encode the Python script locally
+> and decode it on the remote host:
+>
+> ```powershell
+> $script = 'import bcrypt; print(bcrypt.hashpw(b"YourPassword", bcrypt.gensalt()).decode())'
+> $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+> ssh your-server "echo $b64 | base64 -d | /opt/mcp-homelab/.venv/bin/python"
+> ```
+>
+> Or just SSH in interactively and run the Python command directly on the server.
+
+#### 2. Add the hash to the server's `.env` file
+
+The `.env` file location depends on your deployment:
+
+- **systemd service (via `mcp-homelab install`):** `/opt/mcp-homelab/.env`
+- **Manual / development:** wherever your `.env` file lives
+
+Add or update this line:
+
+```bash
+# --- Admin Login Gate ---
 MCP_ADMIN_PASSWORD_HASH='$2b$12$...'   # paste the full hash here
 ```
 
-When set, every OAuth authorization attempt will redirect to a password-protected login page. Only someone who knows the admin password can approve the connection.
+> **Note:** The hash contains `$` characters. In most shells and systemd `EnvironmentFile`
+> format, the value does **not** need quoting — systemd reads the file literally. If you're
+> using `export` in a shell script, single-quote the value to prevent `$` interpolation.
+
+#### 3. Restart the service
+
+```bash
+sudo systemctl restart mcp-homelab
+```
+
+#### 4. Verify the login gate is active
+
+Check the service logs for the confirmation line:
+
+```bash
+sudo systemctl status mcp-homelab --no-pager
+```
+
+You should see:
+
+```
+Admin login gate enabled for OAuth authorization
+```
+
+If you instead see `WARNING: MCP_ADMIN_PASSWORD_HASH is not set`, the env var was not picked up — double-check the `.env` file path and contents.
+
+#### Behavior summary
+
+When **set**, every OAuth authorization attempt redirects to a password-protected login page. Only someone who knows the admin password can approve the connection.
 
 When **not set**, the server logs a warning and falls back to auto-approve (suitable for LAN-only or stdio mode).
 

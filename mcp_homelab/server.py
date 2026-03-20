@@ -383,7 +383,7 @@ def start_server() -> None:
         # falls back to auto-approve with a warning.  Generate with:
         #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
         admin_hash = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
-        login_url: str | None = f"{public_url}/login" if admin_hash else None
+        login_url: str | None = f"{public_url.rstrip('/')}/login" if admin_hash else None
 
         # FastMCP attributes.  Setting them post-construction is safe
         # because the SDK reads them at run() time when building Starlette
