@@ -7,7 +7,7 @@ clients, auth codes, tokens) lives in memory and is cleared on restart.
 Security controls:
 - Admin login gate: ``authorize()`` redirects to a password-protected
   login page instead of auto-approving.  Set ``MCP_ADMIN_PASSWORD_HASH``
-  to enable (required in HTTP mode).
+  to enable (strongly recommended in HTTP mode; auto-approves if unset).
 - Max registered clients cap (prevents DoS via unbounded DCR)
 - Max outstanding auth codes and pending sessions caps
 - Auth codes are single-use and time-limited (5 min)
@@ -22,7 +22,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass
-from urllib.parse import urlparse
+from urllib.parse import urlencode, urlparse, urlunparse
 
 from pydantic import AnyUrl
 
@@ -246,7 +246,11 @@ class HomelabOAuthProvider:
             client.client_id,
             redirect_domain,
         )
-        return f"{self._login_url}?session={session_token}"
+        # Build redirect safely — preserves any existing query params
+        parsed = urlparse(self._login_url)
+        sep = "&" if parsed.query else ""
+        new_query = f"{parsed.query}{sep}{urlencode({'session': session_token})}"
+        return urlunparse(parsed._replace(query=new_query))
 
     def get_pending_session(self, session_token: str) -> PendingSession | None:
         """Look up a pending session by token, returning None if expired."""

@@ -377,6 +377,14 @@ def start_server() -> None:
         )
 
         # NOTE: _auth_server_provider and _token_verifier are private
+        # ── Admin login gate ──────────────────────────────────────────
+        # MCP_ADMIN_PASSWORD_HASH is strongly recommended in HTTP mode to
+        # prevent unauthenticated OAuth auto-approve.  If unset, authorize()
+        # falls back to auto-approve with a warning.  Generate with:
+        #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
+        admin_hash = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
+        login_url: str | None = f"{public_url}/login" if admin_hash else None
+
         # FastMCP attributes.  Setting them post-construction is safe
         # because the SDK reads them at run() time when building Starlette
         # routes — not at construction.  Integration tests verify auth is
@@ -385,16 +393,11 @@ def start_server() -> None:
             client_id=client_id,
             client_secret=client_secret,
             allowed_redirect_origins=allowed_redirect_origins,
-            login_url=f"{public_url}/login",
+            login_url=login_url,
         )
         mcp._auth_server_provider = provider
         mcp._token_verifier = ProviderTokenVerifier(provider)
 
-        # ── Admin login gate ──────────────────────────────────────────
-        # MCP_ADMIN_PASSWORD_HASH is required in HTTP mode to prevent
-        # unauthenticated OAuth auto-approve. Generate with:
-        #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
-        admin_hash = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
         if admin_hash:
             from mcp_homelab.core.login import LoginHandler, validate_bcrypt_hash
 
@@ -418,9 +421,6 @@ def start_server() -> None:
 
             logger.info("Admin login gate enabled for OAuth authorization")
         else:
-            # No password hash → disable login gate (auto-approve mode).
-            # Clear login_url so authorize() falls back to auto-approve.
-            provider._login_url = None
             logger.warning(
                 "MCP_ADMIN_PASSWORD_HASH is not set — OAuth authorization will "
                 "auto-approve all requests. Anyone who can reach this server can "

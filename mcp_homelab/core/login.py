@@ -16,6 +16,7 @@ response to prevent clickjacking, embedding, and caching.
 from __future__ import annotations
 
 import html
+import ipaddress
 import logging
 import re
 import time
@@ -42,6 +43,9 @@ MAX_ATTEMPTS_PER_IP: int = 5
 
 RATE_LIMIT_WINDOW: int = 300
 """Rate-limit window in seconds (5 minutes)."""
+
+MAX_RATE_LIMIT_RECORDS: int = 1000
+"""Max tracked IPs in the rate-limiter.  Oldest entries are evicted when full."""
 
 _SECURITY_HEADERS: dict[str, str] = {
     "Content-Security-Policy": (
@@ -87,10 +91,20 @@ class RateLimiter:
         self._records: dict[str, _IpRecord] = {}
 
     def get_client_ip(self, request: Request) -> str:
-        """Extract the real client IP from the request."""
+        """Extract the real client IP from the request.
+
+        Validates ``CF-Connecting-IP`` with ``ipaddress`` to reject
+        spoofed non-IP values that could pollute the rate-limit table.
+        """
         cf_ip = request.headers.get("CF-Connecting-IP")
         if cf_ip:
-            return cf_ip.strip()
+            cf_ip = cf_ip.strip()
+            try:
+                ipaddress.ip_address(cf_ip)
+                return cf_ip
+            except ValueError:
+                # Spoofed or malformed — fall through to socket IP
+                pass
         if request.client:
             return request.client.host
         return "unknown"
@@ -112,9 +126,27 @@ class RateLimiter:
         now = time.time()
         record = self._records.get(ip)
         if record is None or now - record.window_start > self._window_seconds:
+            # Evict expired entries before adding a new one
+            if len(self._records) >= MAX_RATE_LIMIT_RECORDS:
+                self._evict_expired(now)
+            # If still at cap after eviction, drop the oldest entry
+            if len(self._records) >= MAX_RATE_LIMIT_RECORDS:
+                oldest_ip = min(
+                    self._records, key=lambda k: self._records[k].window_start,
+                )
+                del self._records[oldest_ip]
             self._records[ip] = _IpRecord(attempts=1, window_start=now)
         else:
             record.attempts += 1
+
+    def _evict_expired(self, now: float) -> None:
+        """Remove all rate-limit records whose window has expired."""
+        expired = [
+            ip for ip, rec in self._records.items()
+            if now - rec.window_start > self._window_seconds
+        ]
+        for ip in expired:
+            del self._records[ip]
 
     def reset(self, ip: str) -> None:
         """Clear rate-limit state for *ip* after successful login."""
@@ -214,8 +246,18 @@ class LoginHandler:
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def validate_bcrypt_hash(hash_str: str) -> bool:
-    """Return True if *hash_str* looks like a valid bcrypt hash."""
-    return bool(re.match(r"^\$2[aby]?\$\d{2}\$.{53}$", hash_str))
+    """Return True if *hash_str* is a valid bcrypt hash.
+
+    First checks format via regex, then probes with ``bcrypt.checkpw``
+    to catch hashes that pass the regex but are not actually parseable.
+    """
+    if not re.match(r"^\$2[aby]?\$\d{2}\$.{53}$", hash_str):
+        return False
+    try:
+        bcrypt.checkpw(b"probe", hash_str.encode("utf-8"))
+    except (ValueError, TypeError):
+        return False
+    return True
 
 
 def _apply_security_headers(response: Response) -> Response:
