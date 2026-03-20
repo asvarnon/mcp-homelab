@@ -9,11 +9,105 @@ Run mcp-homelab as a persistent service on a dedicated machine so multiple clien
 | Aspect             | Local (default)                               | Hosted                                            |
 | ------------------ | --------------------------------------------- | ------------------------------------------------- |
 | Transport          | stdio                                         | HTTP                                              |
-| Auth               | None (process-level)                          | OAuth 2.1 (PKCE, dynamic client registration)     |
+| Auth               | None (process-level)                          | OAuth 2.1 (PKCE, pre-registered client or DCR)    |
 | Process management | Client spawns server                          | systemd service                                   |
 | Network access     | localhost only                                | LAN or internet-reachable                         |
 | Clients            | One (the spawning client)                     | Many, each points at server URL                   |
 | Config             | `mcp-homelab setup client` writes stdio entry | Each client connects to `https://your-server-url` |
+
+---
+
+## ⚠️ Security Warning: Remote Hosting Requires Admin Password
+
+When mcp-homelab runs in HTTP mode and is reachable from the internet (e.g., via Cloudflare Tunnel), **anyone who can reach your server URL can complete the OAuth flow and call all MCP tools** unless you set an admin password.
+
+By default, the OAuth `authorize` endpoint auto-approves every request. This is fine for LAN-only deployments, but **critically dangerous** for internet-exposed servers — an attacker who discovers your URL can register an OAuth client, complete authorization, and query your entire homelab infrastructure.
+
+### How to fix: Set `MCP_ADMIN_PASSWORD_HASH`
+
+#### 1. Generate the bcrypt hash
+
+**Option A — Interactive prompt (recommended for local use):**
+
+```bash
+# Run on any machine with Python + bcrypt installed:
+python -c "import bcrypt; print(bcrypt.hashpw(input('Password: ').encode(), bcrypt.gensalt()).decode())"
+```
+
+**Option B — Non-interactive (good for scripting or remote SSH):**
+
+```bash
+# Directly on the server:
+/opt/mcp-homelab/.venv/bin/python -c "import bcrypt; print(bcrypt.hashpw(b'YourPassword', bcrypt.gensalt()).decode())"
+```
+
+> **⚠️ PowerShell + SSH escaping issue:** If you're running the hash command over SSH
+> from a Windows PowerShell session, nested quotes and `$` signs in the bcrypt output
+> will be mangled. The simplest workaround is to base64-encode the Python script locally
+> and decode it on the remote host:
+>
+> ```powershell
+> $script = 'import bcrypt; print(bcrypt.hashpw(b"YourPassword", bcrypt.gensalt()).decode())'
+> $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($script))
+> ssh your-server "echo $b64 | base64 -d | /opt/mcp-homelab/.venv/bin/python"
+> ```
+>
+> Or just SSH in interactively and run the Python command directly on the server.
+
+#### 2. Add the hash to the server's `.env` file
+
+The `.env` file location depends on your deployment:
+
+- **systemd service (via `mcp-homelab install`):** `/opt/mcp-homelab/.env`
+- **Manual / development:** wherever your `.env` file lives
+
+Add or update this line:
+
+```bash
+# --- Admin Login Gate ---
+MCP_ADMIN_PASSWORD_HASH='$2b$12$...'   # paste the full hash here
+```
+
+> **Note:** The hash contains `$` characters. In most shells and systemd `EnvironmentFile`
+> format, the value does **not** need quoting — systemd reads the file literally. If you're
+> using `export` in a shell script, single-quote the value to prevent `$` interpolation.
+
+#### 3. Restart the service
+
+```bash
+sudo systemctl restart mcp-homelab
+```
+
+#### 4. Verify the login gate is active
+
+Check the service logs for the confirmation line:
+
+```bash
+sudo systemctl status mcp-homelab --no-pager
+```
+
+You should see:
+
+```
+Admin login gate enabled for OAuth authorization
+```
+
+If you instead see `WARNING: MCP_ADMIN_PASSWORD_HASH is not set`, the env var was not picked up — double-check the `.env` file path and contents.
+
+#### Behavior summary
+
+When **set**, every OAuth authorization attempt redirects to a password-protected login page. Only someone who knows the admin password can approve the connection.
+
+When **not set**, the server logs a warning and falls back to auto-approve (suitable for LAN-only or stdio mode).
+
+### When do you need this?
+
+| Deployment                     | Internet-reachable? | `MCP_ADMIN_PASSWORD_HASH` required? |
+| ------------------------------ | ------------------- | ----------------------------------- |
+| Local stdio                    | No                  | Not needed                          |
+| LAN-only HTTP                  | No                  | Recommended                         |
+| Cloudflare Tunnel / VPN        | Yes                 | **Required**                        |
+| Any public HTTPS reverse proxy | Yes                 | **Required**                        |
 
 ---
 

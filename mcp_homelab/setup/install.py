@@ -164,39 +164,133 @@ def _update_server_config(config_path: Path, public_url: str) -> None:
         yaml.dump(data, file)
 
 
+def _encrypt_credentials(install_path: Path) -> list[str]:
+    """Encrypt .env secrets as systemd credentials.
+
+    Reads all configured credential keys from .env, encrypts each using
+    ``systemd-creds encrypt --with-key=auto`` (TPM2 with host-key
+    fallback), and writes encrypted files to ``/etc/credstore.encrypted/``.
+
+    Returns list of credential names that were successfully encrypted.
+    """
+    from mcp_homelab.core.config import _CREDENTIAL_KEYS
+
+    env_path = install_path / ".env"
+    if not env_path.is_file():
+        print("  \u2717 .env not found \u2014 cannot encrypt credentials", file=sys.stderr)
+        sys.exit(1)
+
+    # Parse .env to extract secret values
+    secrets: dict[str, str] = {}
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key in _CREDENTIAL_KEYS and value:
+            secrets[key] = value
+
+    if not secrets:
+        print("  \u26a0 no encryptable secrets found in .env", file=sys.stderr)
+        return []
+
+    credstore = Path("/etc/credstore.encrypted")
+    credstore.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chown(credstore, 0, 0)  # type: ignore[attr-defined]  # Unix-only; guarded by _ensure_linux()
+    os.chmod(credstore, 0o700)
+
+    encrypted: list[str] = []
+    for key in _CREDENTIAL_KEYS:
+        value = secrets.get(key)
+        if not value:
+            continue
+        output_path = credstore / key
+        try:
+            result = subprocess.run(
+                [
+                    "systemd-creds", "encrypt",
+                    "--with-key=auto",
+                    f"--name={key}",
+                    "-", str(output_path),
+                ],
+                input=value,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"  \u2717 failed to encrypt {key}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        if result.returncode != 0:
+            stderr = result.stderr.strip() if result.stderr else "(no output)"
+            print(f"  \u2717 failed to encrypt {key}: {stderr}", file=sys.stderr)
+            sys.exit(1)
+        encrypted.append(key)
+        print(f"  \u2192 encrypted {key} \u2713")
+
+    return encrypted
+
+
 def _write_systemd_unit(
     install_path: Path,
     output_path: Path,
     *,
     in_container: bool = False,
+    credential_keys: list[str] | None = None,
 ) -> None:
     """Load the bundled service template, render it, and write to output_path."""
     _validate_path_safe(install_path)
     service_ref = importlib.resources.files("mcp_homelab.data").joinpath("mcp-homelab.service")
     template = service_ref.read_text(encoding="utf-8")
     rendered = template.replace("/opt/mcp-homelab", str(install_path))
+    if credential_keys:
+        credential_lines = "\n".join(
+            f"LoadCredentialEncrypted={key}" for key in credential_keys
+        )
+        # In credential mode, remove EnvironmentFile= so .env secrets
+        # don't shadow the encrypted credentials at runtime.
+        rendered = rendered.replace(
+            f"EnvironmentFile={install_path}/.env\n",
+            "",
+            1,
+        )
+        # Insert credential directives before ExecStart=
+        rendered = rendered.replace(
+            "ExecStart=",
+            f"{credential_lines}\nExecStart=",
+            1,
+        )
     if in_container:
         rendered = _strip_namespace_directives(rendered)
     output_path.write_text(rendered, encoding="utf-8")
 
 
-def run_install(public_url: str | None = None) -> None:
+def run_install(
+    public_url: str | None = None,
+    *,
+    use_credentials: bool = False,
+) -> None:
     """Convert a local mcp-homelab checkout into a systemd HTTP service."""
     print("\n--- mcp-homelab install ---\n")
 
-    print("[1/10] Checking platform...")
+    total_steps = 11 if use_credentials else 10
+
+    print(f"[1/{total_steps}] Checking platform...")
     _ensure_linux()
     print("  → Linux detected ✓")
 
-    print("[2/10] Checking privileges...")
+    print(f"[2/{total_steps}] Checking privileges...")
     _ensure_root()
     print("  → root privileges confirmed ✓")
 
-    print("[3/10] Detecting install path...")
+    print(f"[3/{total_steps}] Detecting install path...")
     install_path = _detect_install_path()
     print(f"  → install path: {install_path} ✓")
 
-    print("[4/10] Ensuring service user exists...")
+    print(f"[4/{total_steps}] Ensuring service user exists...")
     id_result = subprocess.run(["id", "mcp"], check=False, capture_output=True, text=True)
     if id_result.returncode == 0:
         print("  → service user mcp already exists ✓")
@@ -214,38 +308,79 @@ def run_install(public_url: str | None = None) -> None:
         )
         print("  → created service user mcp ✓")
 
-    print("[5/10] Setting ownership...")
+    print(f"[5/{total_steps}] Setting ownership and permissions...")
     _run_command(["chown", "-R", "mcp:mcp", str(install_path)], "set ownership")
-    print("  → ownership set to mcp:mcp ✓")
+    env_file = install_path / ".env"
+    if env_file.exists():
+        try:
+            os.chmod(env_file, 0o600)
+        except OSError as exc:
+            print(
+                f"  ✗ failed to set permissions 0600 on {env_file}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    config_file = install_path / "config.yaml"
+    if config_file.exists():
+        try:
+            os.chmod(config_file, 0o640)
+        except OSError as exc:
+            print(
+                f"  ✗ failed to set permissions 0640 on {config_file}: {exc}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    print("  → ownership and permissions set ✓")
 
-    print("[6/10] Resolving public URL...")
+    credential_keys: list[str] = []
+    step = 6
+
+    if use_credentials:
+        print(f"[{step}/{total_steps}] Encrypting credentials...")
+        credential_keys = _encrypt_credentials(install_path)
+        if credential_keys:
+            print(f"  \u2192 {len(credential_keys)} credential(s) encrypted \u2713")
+        else:
+            print("  \u26a0 no credentials encrypted (check .env contents)")
+        step += 1
+
+    print(f"[{step}/{total_steps}] Resolving public URL...")
     resolved_public_url = _resolve_public_url(public_url)
-    print(f"  → public URL set to {resolved_public_url} ✓")
+    print(f"  \u2192 public URL set to {resolved_public_url} \u2713")
+    step += 1
 
-    print("[7/10] Updating config.yaml...")
+    print(f"[{step}/{total_steps}] Updating config.yaml...")
     config_path = install_path / "config.yaml"
     if not config_path.exists():
-        print(f"  ✗ config.yaml not found at {config_path}", file=sys.stderr)
+        print(f"  \u2717 config.yaml not found at {config_path}", file=sys.stderr)
         sys.exit(1)
     _update_server_config(config_path, resolved_public_url)
-    print("  → config.yaml updated (HTTP mode) ✓")
+    print("  \u2192 config.yaml updated (HTTP mode) \u2713")
+    step += 1
 
-    print("[8/10] Installing systemd unit...")
+    print(f"[{step}/{total_steps}] Installing systemd unit...")
     container_type = _detect_container()
     service_path = Path("/etc/systemd/system/mcp-homelab.service")
-    _write_systemd_unit(install_path, service_path, in_container=container_type is not None)
+    _write_systemd_unit(
+        install_path,
+        service_path,
+        in_container=container_type is not None,
+        credential_keys=credential_keys or None,
+    )
     if container_type:
         print(f"  ⚠ wrote {service_path} (sandbox directives stripped — {container_type} container detected)")
     else:
         print(f"  → wrote {service_path} ✓")
+    step += 1
 
-    print("[9/10] Enabling and starting service...")
+    print(f"[{step}/{total_steps}] Enabling and starting service...")
     _run_command(["systemctl", "daemon-reload"], "systemd daemon reload")
     _run_command(["systemctl", "enable", "mcp-homelab"], "enable service")
     _run_command(["systemctl", "start", "mcp-homelab"], "start service")
-    print("  → service enabled and started ✓")
+    print("  \u2192 service enabled and started \u2713")
+    step += 1
 
-    print("[10/10] Verifying service status...")
+    print(f"[{step}/{total_steps}] Verifying service status...")
     status_result = _run_command(["systemctl", "is-active", "mcp-homelab"], "verify service status")
     status = status_result.stdout.strip() or "unknown"
     print(f"  → mcp-homelab status: {status} ✓")

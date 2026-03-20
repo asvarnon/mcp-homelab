@@ -6,7 +6,9 @@ No secrets are ever stored in config.yaml.
 
 from __future__ import annotations
 
+import logging
 import os
+import stat
 from pathlib import Path
 from typing import Any, Literal, NamedTuple
 
@@ -15,6 +17,8 @@ import warnings
 from ruamel.yaml import YAML
 from dotenv import load_dotenv
 from pydantic import AnyHttpUrl, BaseModel, Field, model_validator
+
+logger = logging.getLogger(__name__)
 
 
 class HostConfig(BaseModel):
@@ -114,12 +118,107 @@ def get_config_dir() -> Path:
     return Path.cwd()
 
 
+_IS_POSIX = os.name != "nt"
+
+
+def _warn_file_permissions(path: Path, max_mode: int, label: str) -> None:
+    """Log a warning if *path* has permissions more open than *max_mode*.
+
+    Only group/other bits are checked — owner-only bits (e.g. execute)
+    are ignored since they don't affect exposure to other users.
+    Skipped on Windows where POSIX permission bits don't apply.
+    """
+    if not _IS_POSIX or not path.is_file():
+        return
+    mode = stat.S_IMODE(os.stat(path).st_mode)
+    exposure = mode & (stat.S_IRWXG | stat.S_IRWXO)
+    if exposure & ~max_mode:
+        logger.warning(
+            "%s (%s) has mode %04o — expected %04o or stricter. "
+            "Run: chmod %04o %s",
+            label, path, mode, max_mode, max_mode, path,
+        )
+
+
 def load_env() -> None:
     """Load the .env file from the config directory.
 
     Must be called before any env-var accessors are used.
     """
-    load_dotenv(get_config_dir() / ".env")
+    env_path = get_config_dir() / ".env"
+    _warn_file_permissions(env_path, 0o600, ".env")
+    load_dotenv(env_path)
+
+
+# The secrets that can be loaded from systemd credentials directory.
+_CREDENTIAL_KEYS: tuple[str, ...] = (
+    "PROXMOX_TOKEN_ID",
+    "PROXMOX_TOKEN_SECRET",
+    "OPNSENSE_API_KEY",
+    "OPNSENSE_API_SECRET",
+    "MCP_CLIENT_ID",
+    "MCP_CLIENT_SECRET",
+)
+
+
+def load_from_credentials_dir() -> None:
+    """Load secrets from systemd's CREDENTIALS_DIRECTORY if available.
+
+    When the service runs with LoadCredentialEncrypted= directives,
+    systemd sets CREDENTIALS_DIRECTORY to a tmpfs path containing
+    decrypted credential files. Each file is named after the env var
+    (e.g., ``PROXMOX_TOKEN_ID``) and contains the secret value.
+
+    Precedence (highest wins): shell env > credentials > .env.
+    Already-set env vars are never overwritten — this allows operators
+    to override credentials via the shell or process manager.
+
+    Falls back silently when CREDENTIALS_DIRECTORY is not set (dev
+    mode, non-systemd environments).
+    """
+    credentials_dir_raw = os.environ.get("CREDENTIALS_DIRECTORY")
+    if not credentials_dir_raw:
+        logger.debug("CREDENTIALS_DIRECTORY not set, skipping credential loading")
+        return
+
+    credentials_dir = Path(credentials_dir_raw)
+    if not credentials_dir.is_dir():
+        logger.warning(
+            "CREDENTIALS_DIRECTORY is set but directory does not exist: %s",
+            credentials_dir,
+        )
+        return
+
+    loaded_from_credentials = 0
+    loaded_from_environment = 0
+
+    for key in _CREDENTIAL_KEYS:
+        if os.environ.get(key):
+            logger.info("%s: loaded from environment", key)
+            loaded_from_environment += 1
+            continue
+
+        credential_path = credentials_dir / key
+        if credential_path.is_file():
+            try:
+                value = credential_path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to read credential file %s: %s; "
+                    "falling back to environment/.env",
+                    credential_path,
+                    exc,
+                )
+                continue
+            os.environ[key] = value
+            logger.info("%s: loaded from credentials directory", key)
+            loaded_from_credentials += 1
+
+    logger.info(
+        "Credential loading complete: %d from credentials directory, %d from environment",
+        loaded_from_credentials,
+        loaded_from_environment,
+    )
 
 
 _WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})
@@ -156,6 +255,29 @@ def validate_env() -> None:
                 "server.host is '0.0.0.0' (all interfaces) but server.public_url is not set. "
                 "The MCP SDK requires a valid public URL for Host header validation. "
                 "Set server.public_url to the URL clients will use (e.g., 'http://203.0.113.111:8000')."
+            )
+
+        # OAuth client credentials: both or neither.
+        client_id = os.environ.get("MCP_CLIENT_ID", "")
+        client_secret = os.environ.get("MCP_CLIENT_SECRET", "")
+        has_id = bool(client_id)
+        has_secret = bool(client_secret)
+        if has_id != has_secret:
+            raise EnvironmentError(
+                "MCP_CLIENT_ID and MCP_CLIENT_SECRET must both be set or both be empty. "
+                f"Got: MCP_CLIENT_ID={'set' if has_id else 'empty'}, "
+                f"MCP_CLIENT_SECRET={'set' if has_secret else 'empty'}."
+            )
+        _MIN_CREDENTIAL_LEN = 32
+        if has_id and len(client_id) < _MIN_CREDENTIAL_LEN:
+            raise EnvironmentError(
+                f"MCP_CLIENT_ID must be at least {_MIN_CREDENTIAL_LEN} characters "
+                f"(got {len(client_id)}). Use a cryptographically random value."
+            )
+        if has_secret and len(client_secret) < _MIN_CREDENTIAL_LEN:
+            raise EnvironmentError(
+                f"MCP_CLIENT_SECRET must be at least {_MIN_CREDENTIAL_LEN} characters "
+                f"(got {len(client_secret)}). Use a cryptographically random value."
             )
 
     if missing:

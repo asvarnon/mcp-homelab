@@ -189,6 +189,23 @@ This writes the correct stdio transport entry including the `MCP_HOMELAB_CONFIG_
 The `MCP_HOMELAB_CONFIG_DIR` env var is required — without it, MCP clients that spawn from a different working directory won't find your config files.
 </details>
 
+### OAuth client lockdown (hosted mode)
+
+When running in HTTP mode, mcp-homelab uses OAuth 2.1 for authentication. By default, it accepts Dynamic Client Registration (DCR) from any client. To restrict access to a single pre-registered client, set these env vars in `.env`:
+
+```bash
+# Generate credentials (both must be ≥32 characters)
+python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+# Add to .env
+MCP_CLIENT_ID=<generated-value>
+MCP_CLIENT_SECRET=<generated-value>
+```
+
+When both are set, this static client is pre-registered alongside Dynamic Client Registration (DCR). To restrict which clients can register dynamically, set `MCP_ALLOWED_REDIRECT_ORIGINS` (comma-separated origins). When connecting from Claude Desktop, enter these values in the OAuth Client ID / Client Secret prompt.
+
+If neither is set, the server uses open DCR (backward compatible, suitable for trusted LANs).
+
 ### Hosted mode (multi-client)
 
 Want to run mcp-homelab as a shared service accessible from multiple machines, Claude.ai, or mobile? See the [Hosted Mode Guide](guides/hosted-mode.md) for the full workflow, including the platform-specific [Proxmox LXC + Cloudflare Tunnel](guides/proxmox-cloudflare-tunnel.md) reference architecture.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 import pytest
@@ -14,7 +15,7 @@ from mcp.server.auth.provider import (
     RefreshToken,
     RegistrationError,
 )
-from mcp.shared.auth import OAuthClientInformationFull
+from mcp.shared.auth import InvalidRedirectUriError, OAuthClientInformationFull
 
 from mcp_homelab.core.oauth_provider import (
     ACCESS_TOKEN_TTL,
@@ -22,17 +23,22 @@ from mcp_homelab.core.oauth_provider import (
     MAX_AUTH_CODES,
     MAX_CLIENTS,
     REFRESH_TOKEN_TTL,
+    FlexibleRedirectClient,
     HomelabOAuthProvider,
 )
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────
 
-def _make_client(client_id: str = "test-client") -> OAuthClientInformationFull:
+def _make_client(
+    client_id: str = "test-client",
+    redirect_uris: list[str] | None = None,
+) -> OAuthClientInformationFull:
+    uris = redirect_uris or ["http://localhost:3000/callback"]
     return OAuthClientInformationFull(
         client_id=client_id,
         client_secret="test-secret",
-        redirect_uris=[AnyUrl("http://localhost:3000/callback")],
+        redirect_uris=[AnyUrl(uri) for uri in uris],
         client_name="Test Client",
         grant_types=["authorization_code", "refresh_token"],
         response_types=["code"],
@@ -103,6 +109,110 @@ class TestClientRegistration:
         with pytest.raises(RegistrationError) as exc_info:
             await provider.register_client(client)
         assert "client_id" in (exc_info.value.error_description or "")
+
+
+class TestRedirectUriAllowlisting:
+    async def test_allowlist_match_succeeds(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "allowed-client",
+            redirect_uris=["https://claude.ai/callback"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("allowed-client")
+        assert result is not None
+
+    async def test_allowlist_rejection_raises_invalid_redirect_uri(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "blocked-client",
+            redirect_uris=["https://attacker.com/callback"],
+        )
+
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(client)
+
+        assert exc_info.value.error == "invalid_redirect_uri"
+
+    async def test_multiple_origins_one_matches(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai", "http://localhost"],
+        )
+        client = _make_client(
+            "multi-origin-client",
+            redirect_uris=["http://localhost:4000/cb"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("multi-origin-client")
+        assert result is not None
+
+    async def test_all_redirect_uris_must_pass(self) -> None:
+        provider = HomelabOAuthProvider(
+            allowed_redirect_origins=["https://claude.ai"],
+        )
+        client = _make_client(
+            "mixed-client",
+            redirect_uris=["https://claude.ai/cb", "https://evil.com/cb"],
+        )
+
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(client)
+
+        assert exc_info.value.error == "invalid_redirect_uri"
+
+    async def test_no_allowlist_accepts_any_redirect_uri(self) -> None:
+        provider = HomelabOAuthProvider()
+        client = _make_client(
+            "open-client",
+            redirect_uris=["https://attacker.com/callback"],
+        )
+
+        await provider.register_client(client)
+
+        result = await provider.get_client("open-client")
+        assert result is not None
+
+    def test_warning_logged_when_no_allowlist(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        with caplog.at_level(logging.WARNING):
+            HomelabOAuthProvider()
+
+        assert "MCP_ALLOWED_REDIRECT_ORIGINS is not set" in caplog.text
+
+
+class TestUriMatchesOrigin:
+    @pytest.mark.parametrize(
+        ("redirect_uri", "origin", "expected"),
+        [
+            ("https://claude.ai/callback", "https://claude.ai", True),
+            ("https://attacker.com/callback", "https://claude.ai", False),
+            ("http://localhost:3000/cb", "http://localhost", True),
+            ("http://localhost:3000/cb", "http://localhost:3000", True),
+            ("http://localhost:4000/cb", "http://localhost:3000", False),
+            ("http://127.0.0.1:3000/cb", "http://localhost", False),
+            ("http://127.0.0.1:3000/cb", "http://127.0.0.1", True),
+            ("http://[::1]:5000/cb", "http://[::1]", True),
+            ("http://[::1]:5000/cb", "http://localhost", False),
+            ("http://claude.ai/callback", "https://claude.ai", False),
+        ],
+    )
+    def test_uri_matches_origin(
+        self,
+        redirect_uri: str,
+        origin: str,
+        expected: bool,
+    ) -> None:
+        assert HomelabOAuthProvider._uri_matches_origin(redirect_uri, origin) is expected
 
 
 # ── Authorization Code Flow ──────────────────────────────────────────────
@@ -437,3 +547,292 @@ class TestExpiredCodeEviction:
         await provider.authorize(client, params)
 
         assert await provider.load_authorization_code(client, code) is None
+
+
+# ── Pre-registered client (DCR lockdown) ──────────────────────────────────
+
+_STATIC_ID = "a" * 32
+_STATIC_SECRET = "b" * 32
+
+
+class TestPreRegisteredClient:
+    """Tests for static client pre-registration and DCR lockdown."""
+
+    async def test_pre_registered_client_available_on_init(self) -> None:
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+        client = await provider.get_client(_STATIC_ID)
+
+        assert client is not None
+        assert client.client_id == _STATIC_ID
+        assert client.client_secret == _STATIC_SECRET
+        assert client.token_endpoint_auth_method == "client_secret_post"
+
+    async def test_dcr_enabled_alongside_static_client(self) -> None:
+        """DCR stays open even when a static client is pre-registered."""
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+
+        await provider.register_client(_make_client("dynamic-client"))
+        result = await provider.get_client("dynamic-client")
+
+        assert result is not None
+        assert result.client_id == "dynamic-client"
+
+    async def test_dcr_enabled_when_no_credentials(self) -> None:
+        provider = HomelabOAuthProvider()
+        client = _make_client("dynamic-client")
+
+        await provider.register_client(client)
+        result = await provider.get_client("dynamic-client")
+
+        assert result is not None
+        assert result.client_id == "dynamic-client"
+
+    async def test_pre_registered_client_full_auth_flow(self) -> None:
+        """Static client can authorize, exchange code, and get tokens."""
+        provider = HomelabOAuthProvider(
+            client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
+        )
+        client = await provider.get_client(_STATIC_ID)
+        assert client is not None
+
+        params = _make_auth_params()
+        redirect_url = await provider.authorize(client, params)
+        code = _extract_code(redirect_url)
+
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        token = await provider.exchange_authorization_code(client, auth_code)
+        assert token.access_token
+        assert token.refresh_token
+
+
+class TestFlexibleRedirectClient:
+    """Tests for FlexibleRedirectClient redirect URI validation."""
+
+    def test_accepts_localhost_with_port(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://localhost:9876/callback"))
+        assert str(result).startswith("http://localhost:9876")
+
+    def test_accepts_127_0_0_1(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://127.0.0.1:5555/cb"))
+        assert str(result).startswith("http://127.0.0.1")
+
+    def test_accepts_https(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("https://example.com/callback"))
+        assert str(result).startswith("https://")
+
+    def test_rejects_non_localhost_http(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://evil.com/callback"))
+
+    def test_rejects_none(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="required"):
+            client.validate_redirect_uri(None)
+
+    def test_rejects_localhost_subdomain(self) -> None:
+        """Regression: startswith('http://localhost') accepted localhost.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://localhost.evil.com/callback"))
+
+    def test_rejects_127_subdomain(self) -> None:
+        """Regression: startswith('http://127.0.0.1') accepted 127.0.0.1.evil.com."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://127.0.0.1.evil.com/callback"))
+
+    def test_accepts_ipv6_loopback(self) -> None:
+        """RFC 8252 §8.3: ::1 is a valid loopback address."""
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        result = client.validate_redirect_uri(AnyUrl("http://[::1]:8080/callback"))
+        assert "::1" in str(result)
+
+    def test_rejects_non_loopback_ip(self) -> None:
+        client = FlexibleRedirectClient(
+            client_id="test",
+            redirect_uris=[AnyUrl("http://localhost/callback")],
+        )
+        with pytest.raises(InvalidRedirectUriError, match="localhost or HTTPS"):
+            client.validate_redirect_uri(AnyUrl("http://192.168.1.100/callback"))
+
+
+class TestStaticClientLogging:
+    """Verify pre-registered client doesn't leak credentials to logs."""
+
+    def test_client_id_not_in_log(self, caplog: pytest.LogCaptureFixture) -> None:
+        secret_id = "a" * 32
+        secret_pw = "b" * 32
+        with caplog.at_level(logging.INFO):
+            HomelabOAuthProvider(client_id=secret_id, client_secret=secret_pw)
+        assert secret_id not in caplog.text
+        assert "Pre-registered static OAuth client" in caplog.text
+
+
+# ── Pending Session (Login Gate) ─────────────────────────────────────────
+
+class TestPendingSessionFlow:
+    """Tests for authorize() with login_url set (admin login gate)."""
+
+    async def test_authorize_redirects_to_login(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+
+        assert redirect_url.startswith("https://mcp.example.com/login?session=")
+        assert "code=" not in redirect_url
+
+    async def test_authorize_creates_pending_session(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        session = provider.get_pending_session(token)
+        assert session is not None
+        assert session.client_name == "Test Client"
+        assert session.redirect_domain == "localhost:3000"
+
+    async def test_complete_authorization_issues_code(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        result = provider.complete_authorization(token)
+
+        assert result is not None
+        assert "code=" in result
+        assert "state=test-state" in result
+
+    async def test_complete_authorization_consumes_session(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        provider.complete_authorization(token)
+
+        # Second call should return None — session consumed
+        assert provider.complete_authorization(token) is None
+
+    async def test_expired_session_returns_none(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        # Manually expire the session
+        provider._pending_sessions[token].expires_at = time.time() - 1
+
+        assert provider.get_pending_session(token) is None
+
+    async def test_complete_expired_session_returns_none(self) -> None:
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+        token = redirect_url.split("session=")[1]
+
+        # Expire after get_pending_session but before complete
+        provider._pending_sessions[token].expires_at = time.time() - 1
+
+        assert provider.complete_authorization(token) is None
+
+    async def test_session_cap_enforcement(self) -> None:
+        from mcp_homelab.core.oauth_provider import MAX_PENDING_SESSIONS
+
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        for _ in range(MAX_PENDING_SESSIONS):
+            await provider.authorize(client, params)
+
+        # One more should return error redirect
+        redirect_url = await provider.authorize(client, params)
+        assert "error=server_error" in redirect_url
+
+    async def test_no_login_url_auto_approves(self) -> None:
+        """Without login_url, authorize() auto-approves (backward compat)."""
+        provider = HomelabOAuthProvider()
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        redirect_url = await provider.authorize(client, params)
+
+        assert "code=" in redirect_url
+        assert len(provider._pending_sessions) == 0
+
+    async def test_full_gated_flow(self) -> None:
+        """End-to-end: authorize → pending → complete → exchange tokens."""
+        provider = HomelabOAuthProvider(login_url="https://mcp.example.com/login")
+        client = _make_client()
+        await provider.register_client(client)
+        params = _make_auth_params()
+
+        login_redirect = await provider.authorize(client, params)
+        token = login_redirect.split("session=")[1]
+
+        code_redirect = provider.complete_authorization(token)
+        assert code_redirect is not None
+        code = _extract_code(code_redirect)
+
+        auth_code = await provider.load_authorization_code(client, code)
+        assert auth_code is not None
+
+        oauth_token = await provider.exchange_authorization_code(client, auth_code)
+        assert oauth_token.access_token
+        assert oauth_token.refresh_token

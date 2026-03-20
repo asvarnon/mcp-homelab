@@ -74,6 +74,10 @@ PROXMOX_TOKEN_ID=user@pam!token-name
 PROXMOX_TOKEN_SECRET=your-secret-here
 OPNSENSE_API_KEY=your-key
 OPNSENSE_API_SECRET=your-secret
+
+# Restrict which clients can register via OAuth (recommended)
+# See DEPLOYMENT-GUIDE.md Phase 4.5 for details
+MCP_ALLOWED_REDIRECT_ORIGINS=https://claude.ai,http://localhost
 ```
 
 ### 3. Start the container
@@ -171,9 +175,14 @@ Once the container is running:
 1. Open Claude Desktop → Settings → MCP Servers
 2. Add a new server with the URL: `http://YOUR_HOST_IP:8000`
 3. Claude Desktop will prompt for OAuth Client ID and Client Secret
-4. Complete the OAuth flow — the server currently auto-approves all registrations
+4. Enter the `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` values from your `.env`
 
-> **Security note:** The current OAuth implementation auto-approves all client registrations (Issue #7). On a trusted LAN this is acceptable. Client allowlist support is planned for a future release.
+> **Security note:** Setting `MCP_CLIENT_ID` and `MCP_CLIENT_SECRET` in your `.env` file (both ≥32 characters) adds a pre-registered static OAuth client. Dynamic Client Registration (DCR) remains enabled; to restrict which clients can register, set `MCP_ALLOWED_REDIRECT_ORIGINS` to a comma-separated list of trusted redirect origins. If no static client or origin restrictions are configured, the server auto-approves all client registrations (suitable for trusted LANs only).
+>
+> Generate credentials:
+> ```bash
+> python -c "import secrets; print(secrets.token_urlsafe(48))"
+> ```
 
 ---
 

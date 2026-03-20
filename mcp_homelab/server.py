@@ -9,6 +9,7 @@ Can be run directly (``python server.py``) or via the CLI
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -17,6 +18,8 @@ from pathlib import Path
 # that spawn from a foreign cwd can find config.yaml and .env.
 from mcp_homelab.core.config import bootstrap_config_dir
 bootstrap_config_dir(Path(__file__).resolve().parent.parent)
+
+logger = logging.getLogger(__name__)
 
 from mcp.server.fastmcp import FastMCP
 
@@ -274,8 +277,14 @@ def start_server() -> None:
     (dev shim).  Reads config.yaml to decide between stdio and HTTP
     transport, wiring OAuth 2.1 auth when HTTP mode is active.
     """
-    from mcp_homelab.core.config import load_config, load_env, validate_env
+    from mcp_homelab.core.config import (
+        load_config,
+        load_env,
+        load_from_credentials_dir,
+        validate_env,
+    )
 
+    load_from_credentials_dir()
     load_env()
     validate_env()
 
@@ -290,6 +299,8 @@ def start_server() -> None:
             RevocationOptions,
         )
         from mcp.server.transport_security import TransportSecuritySettings
+        from starlette.requests import Request
+        from starlette.responses import Response
 
         from mcp_homelab.core.oauth_provider import HomelabOAuthProvider
 
@@ -335,21 +346,87 @@ def start_server() -> None:
             allowed_origins=allowed_origins,
         )
 
+        # Pre-registered OAuth client credentials (set via .env or systemd
+        # credentials). Dynamic Client Registration remains enabled so
+        # additional clients can self-register.
+        client_id = os.environ.get("MCP_CLIENT_ID") or None
+        client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
+        raw_origins = os.environ.get("MCP_ALLOWED_REDIRECT_ORIGINS", "")
+        allowed_redirect_origins: list[str] | None = None
+        if raw_origins.strip():
+            allowed_redirect_origins = [
+                origin.strip().rstrip("/")
+                for origin in raw_origins.split(",")
+                if origin.strip()
+            ]
+
+        if not (client_id and client_secret):
+            logger.warning(
+                "MCP_CLIENT_ID / MCP_CLIENT_SECRET not set — no static "
+                "OAuth client registered.  Only dynamically-registered "
+                "clients will be able to authenticate.",
+            )
+
         mcp.settings.auth = AuthSettings(
             issuer_url=AnyHttpUrl(public_url),
             resource_server_url=AnyHttpUrl(public_url),
-            client_registration_options=ClientRegistrationOptions(enabled=True),
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+            ),
             revocation_options=RevocationOptions(enabled=True),
         )
 
         # NOTE: _auth_server_provider and _token_verifier are private
+        # ── Admin login gate ──────────────────────────────────────────
+        # MCP_ADMIN_PASSWORD_HASH is strongly recommended in HTTP mode to
+        # prevent unauthenticated OAuth auto-approve.  If unset, authorize()
+        # falls back to auto-approve with a warning.  Generate with:
+        #   python -c "import bcrypt; print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())"
+        admin_hash = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
+        login_url: str | None = f"{public_url.rstrip('/')}/login" if admin_hash else None
+
         # FastMCP attributes.  Setting them post-construction is safe
         # because the SDK reads them at run() time when building Starlette
         # routes — not at construction.  Integration tests verify auth is
         # enforced end-to-end, so SDK renames will be caught immediately.
-        provider = HomelabOAuthProvider()
+        provider = HomelabOAuthProvider(
+            client_id=client_id,
+            client_secret=client_secret,
+            allowed_redirect_origins=allowed_redirect_origins,
+            login_url=login_url,
+        )
         mcp._auth_server_provider = provider
         mcp._token_verifier = ProviderTokenVerifier(provider)
+
+        if admin_hash:
+            from mcp_homelab.core.login import LoginHandler, validate_bcrypt_hash
+
+            if not validate_bcrypt_hash(admin_hash):
+                logger.error(
+                    "MCP_ADMIN_PASSWORD_HASH is set but is not a valid bcrypt hash. "
+                    "Generate one with: python -c \"import bcrypt; "
+                    "print(bcrypt.hashpw(b'yourpassword', bcrypt.gensalt()).decode())\"",
+                )
+                sys.exit(1)
+
+            login_handler = LoginHandler(provider=provider, password_hash=admin_hash)
+
+            @mcp.custom_route("/login", methods=["GET"])
+            async def login_get(request: Request) -> Response:
+                return await login_handler.handle_get(request)
+
+            @mcp.custom_route("/login", methods=["POST"])
+            async def login_post(request: Request) -> Response:
+                return await login_handler.handle_post(request)
+
+            logger.info("Admin login gate enabled for OAuth authorization")
+        else:
+            logger.warning(
+                "MCP_ADMIN_PASSWORD_HASH is not set — OAuth authorization will "
+                "auto-approve all requests. Anyone who can reach this server can "
+                "obtain tokens. Set this var to require admin login: "
+                "MCP_ADMIN_PASSWORD_HASH=<bcrypt hash>",
+            )
 
         mcp.run(transport="streamable-http")
     else:

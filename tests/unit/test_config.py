@@ -19,9 +19,12 @@ from mcp_homelab.core.config import (
     HostConfig,
     OPNsenseConfig,
     ProxmoxConfig,
+    _CREDENTIAL_KEYS,
+    _warn_file_permissions,
     bootstrap_config_dir,
     get_config_dir,
     load_config,
+    load_from_credentials_dir,
     opnsense_configured,
     proxmox_configured,
     validate_env,
@@ -273,6 +276,83 @@ class TestValidateEnv:
         validate_env()  # Should not raise — opnsense not in config
 
 
+class TestValidateEnvOAuth:
+    """OAuth credential validation for HTTP transport."""
+
+    @staticmethod
+    def _write_http_config(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Write a minimal HTTP-transport config and point the env at it."""
+        from ruamel.yaml import YAML
+
+        config_data = {
+            "hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}},
+            "server": {
+                "transport": "http",
+                "host": "198.51.100.1",
+                "port": 8000,
+            },
+        }
+        yaml = YAML()
+        config_path = tmp_path / "config.yaml"
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(config_data, f)
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
+
+    def test_passes_with_both_oauth_vars(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        validate_env()  # Should not raise
+
+    def test_passes_with_neither_oauth_var(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        validate_env()  # Should not raise — DCR fallback
+
+    def test_fails_with_only_client_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        with pytest.raises(EnvironmentError, match="both be set"):
+            validate_env()
+
+    def test_fails_with_only_client_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        with pytest.raises(EnvironmentError, match="both be set"):
+            validate_env()
+
+    def test_fails_with_short_client_id(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "short")
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "b" * 32)
+        with pytest.raises(EnvironmentError, match="at least 32 characters"):
+            validate_env()
+
+    def test_fails_with_short_client_secret(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        self._write_http_config(tmp_path, monkeypatch)
+        monkeypatch.setenv("MCP_CLIENT_ID", "a" * 32)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "short")
+        with pytest.raises(EnvironmentError, match="at least 32 characters"):
+            validate_env()
+
+
 # ===========================================================================
 # Integration availability helpers
 # ===========================================================================
@@ -314,3 +394,283 @@ class TestConfiguredHelpers:
             yaml.dump({"hosts": {"box": {"hostname": "box", "ip": "198.51.100.1"}}}, f)
         monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(tmp_path))
         assert opnsense_configured() is False
+
+
+# ===========================================================================
+# File permission warnings
+# ===========================================================================
+
+
+class TestWarnFilePermissions:
+    """_warn_file_permissions logs when a file is more open than expected."""
+
+    def test_warns_on_world_readable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100644})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert any("0644" in r.message and ".env" in r.message for r in caplog.records)
+
+    def test_silent_when_strict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100600})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_ignores_owner_execute_bit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Owner-only bits like execute don't indicate exposure to others."""
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        _real_stat = os.stat
+
+        def _selective_stat(path: object, *a: object, **kw: object) -> object:
+            if str(path) == str(secret):
+                return type("S", (), {"st_mode": 0o100700})()
+            return _real_stat(path, *a, **kw)  # type: ignore[arg-type]
+
+        monkeypatch.setattr("mcp_homelab.core.config.os.stat", _selective_stat)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_skipped_on_windows(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", False)
+        secret = tmp_path / ".env"
+        secret.write_text("SECRET=x\n")
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(secret, 0o600, ".env")
+
+        assert not any(".env" in r.message for r in caplog.records)
+
+    def test_skipped_when_file_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        monkeypatch.setattr("mcp_homelab.core.config._IS_POSIX", True)
+        missing = tmp_path / "nonexistent"
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            _warn_file_permissions(missing, 0o600, ".env")
+
+        assert not caplog.records
+
+
+class TestLoadFromCredentialsDir:
+    """load_from_credentials_dir loads secrets from systemd credential files."""
+
+    def test_silent_skip_when_not_set(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """No-op when CREDENTIALS_DIRECTORY is not set (dev mode)."""
+        monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+
+        import logging
+        with caplog.at_level(logging.DEBUG, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert any("not set" in r.message for r in caplog.records)
+
+    def test_warns_when_dir_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Warns when CREDENTIALS_DIRECTORY points to a non-existent path."""
+        missing = tmp_path / "nonexistent"
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(missing))
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert any("does not exist" in r.message for r in caplog.records)
+
+    def test_loads_all_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """All 4 credential files are read and set in os.environ."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+
+        # Clear any existing values
+        for key in _CREDENTIAL_KEYS:
+            monkeypatch.delenv(key, raising=False)
+
+        # Write credential files
+        secrets = {
+            "PROXMOX_TOKEN_ID": "user@pam!tok",
+            "PROXMOX_TOKEN_SECRET": "aaaa-bbbb-cccc",
+            "OPNSENSE_API_KEY": "key123",
+            "OPNSENSE_API_SECRET": "secret456",
+        }
+        for key, value in secrets.items():
+            (cred_dir / key).write_text(value, encoding="utf-8")
+
+        import logging
+        with caplog.at_level(logging.INFO, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        for key, value in secrets.items():
+            assert os.environ.get(key) == value
+
+        assert any("4 from credentials directory" in r.message for r in caplog.records)
+
+    def test_env_takes_precedence_over_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Already-set env vars are never overwritten by credential files."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.setenv("PROXMOX_TOKEN_ID", "from-shell")
+
+        (cred_dir / "PROXMOX_TOKEN_ID").write_text("from-credentials", encoding="utf-8")
+
+        import logging
+        with caplog.at_level(logging.INFO, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert os.environ["PROXMOX_TOKEN_ID"] == "from-shell"
+        assert any(
+            "PROXMOX_TOKEN_ID" in r.message and "loaded from environment" in r.message
+            for r in caplog.records
+        )
+
+    def test_falls_back_to_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Keys not in credentials dir still log as loaded from environment."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.setenv("PROXMOX_TOKEN_ID", "from-env")
+
+        # Only PROXMOX_TOKEN_ID is set via env, no credential files exist
+        for key in _CREDENTIAL_KEYS:
+            if key != "PROXMOX_TOKEN_ID":
+                monkeypatch.delenv(key, raising=False)
+
+        import logging
+        with caplog.at_level(logging.INFO, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert any(
+            "PROXMOX_TOKEN_ID" in r.message and "environment" in r.message
+            for r in caplog.records
+        )
+        assert any("1 from environment" in r.message for r in caplog.records)
+
+    def test_strips_whitespace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Credential file values are stripped of leading/trailing whitespace."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.delenv("OPNSENSE_API_KEY", raising=False)
+
+        (cred_dir / "OPNSENSE_API_KEY").write_text("  secret-with-spaces  \n", encoding="utf-8")
+
+        load_from_credentials_dir()
+
+        assert os.environ["OPNSENSE_API_KEY"] == "secret-with-spaces"
+
+    def test_partial_credentials(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Mix of credentials dir and env produces correct summary."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+        monkeypatch.setenv("OPNSENSE_API_KEY", "from-env")
+        monkeypatch.setenv("OPNSENSE_API_SECRET", "from-env")
+
+        for key in ("PROXMOX_TOKEN_ID", "PROXMOX_TOKEN_SECRET"):
+            monkeypatch.delenv(key, raising=False)
+
+        (cred_dir / "PROXMOX_TOKEN_ID").write_text("cred-tok", encoding="utf-8")
+        (cred_dir / "PROXMOX_TOKEN_SECRET").write_text("cred-sec", encoding="utf-8")
+
+        import logging
+        with caplog.at_level(logging.INFO, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert os.environ["PROXMOX_TOKEN_ID"] == "cred-tok"
+        assert os.environ["OPNSENSE_API_KEY"] == "from-env"
+        assert any("2 from credentials directory, 2 from environment" in r.message for r in caplog.records)
+
+    def test_warns_on_unreadable_credential(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Unreadable credential files log a warning and are skipped."""
+        cred_dir = tmp_path / "credentials"
+        cred_dir.mkdir()
+        monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+
+        for key in _CREDENTIAL_KEYS:
+            monkeypatch.delenv(key, raising=False)
+
+        # Write one good file and make one "unreadable" via monkeypatch
+        (cred_dir / "PROXMOX_TOKEN_ID").write_text("good-value", encoding="utf-8")
+        (cred_dir / "PROXMOX_TOKEN_SECRET").write_text("will-fail", encoding="utf-8")
+
+        original_read_text = Path.read_text
+
+        def patched_read_text(self: Path, *args: object, **kwargs: object) -> str:
+            if self.name == "PROXMOX_TOKEN_SECRET":
+                raise OSError("Permission denied")
+            return original_read_text(self, *args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(Path, "read_text", patched_read_text)
+
+        import logging
+        with caplog.at_level(logging.WARNING, logger="mcp_homelab.core.config"):
+            load_from_credentials_dir()
+
+        assert os.environ.get("PROXMOX_TOKEN_ID") == "good-value"
+        assert "PROXMOX_TOKEN_SECRET" not in os.environ
+        assert any(
+            "Failed to read credential file" in r.message
+            for r in caplog.records
+        )

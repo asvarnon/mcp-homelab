@@ -60,6 +60,14 @@ PROXMOX_TOKEN_SECRET=
 # --- OPNsense API ---
 OPNSENSE_API_KEY=
 OPNSENSE_API_SECRET=
+
+# --- MCP OAuth (HTTP transport only) ---
+# Pre-registered client credentials.  When both are set, this static client
+# is added to the allowed clients.  DCR remains enabled unless constrained
+# via MCP_ALLOWED_REDIRECT_ORIGINS.
+# Generate with: python -c "import secrets; print(secrets.token_urlsafe(48))"
+MCP_CLIENT_ID=
+MCP_CLIENT_SECRET=
 """
 
 
@@ -195,6 +203,7 @@ def main() -> None:
 
     install_parser = subparsers.add_parser("install", help="Install as a systemd service (requires root)")
     install_parser.add_argument("--public-url", default=None, help="Public HTTPS URL for OAuth (prompted if omitted)")
+    install_parser.add_argument("--use-credentials", action="store_true", help="Encrypt secrets with systemd-creds and use LoadCredentialEncrypted")
 
     # setup subcommand with its own sub-subcommands
     setup_parser = subparsers.add_parser("setup", help="Guided setup wizard for configuring nodes and integrations")
@@ -231,7 +240,7 @@ def main() -> None:
             _cmd_serve(args)
         elif args.command == "install":
             from mcp_homelab.setup.install import run_install
-            run_install(public_url=args.public_url)
+            run_install(public_url=args.public_url, use_credentials=args.use_credentials)
         elif args.command == "setup":
             _cmd_setup(args)
         else:
