@@ -461,14 +461,17 @@ class TestPreRegisteredClient:
         assert client.client_secret == _STATIC_SECRET
         assert client.token_endpoint_auth_method == "client_secret_post"
 
-    async def test_dcr_disabled_when_credentials_provided(self) -> None:
+    async def test_dcr_enabled_alongside_static_client(self) -> None:
+        """DCR stays open even when a static client is pre-registered."""
         provider = HomelabOAuthProvider(
             client_id=_STATIC_ID, client_secret=_STATIC_SECRET,
         )
 
-        with pytest.raises(RegistrationError) as exc_info:
-            await provider.register_client(_make_client("intruder"))
-        assert "disabled" in (exc_info.value.error_description or "").lower()
+        await provider.register_client(_make_client("dynamic-client"))
+        result = await provider.get_client("dynamic-client")
+
+        assert result is not None
+        assert result.client_id == "dynamic-client"
 
     async def test_dcr_enabled_when_no_credentials(self) -> None:
         provider = HomelabOAuthProvider()
