@@ -13,6 +13,7 @@ from typing_extensions import TypedDict
 
 from mcp_homelab.core.config import get_proxmox_config, proxmox_configured
 from mcp_homelab.core.proxmox_api import ProxmoxClient
+from mcp_homelab.tools import _not_configured_error
 
 
 # ---------------------------------------------------------------------------
@@ -99,9 +100,9 @@ _BYTES_PER_GB = 1024 ** 3   # 1_073_741_824
 
 _client = ProxmoxClient()
 
-_NOT_CONFIGURED: dict[str, str] = {
-    "error": "Proxmox is not configured. Add a 'proxmox' section to config.yaml and set PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET in .env.",
-}
+_NOT_CONFIGURED: dict[str, str] = _not_configured_error(
+    "Proxmox", "proxmox", "PROXMOX_TOKEN_ID / PROXMOX_TOKEN_SECRET",
+)
 
 # Proxmox config fields: safe characters for storage pool names, bridge names,
 # volume IDs (e.g. "local:iso/debian-13.iso"), and templates.
