@@ -6,10 +6,15 @@ for every configured node and integration. No side effects.
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
-from mcp_homelab.core.config import AppConfig, get_config_dir, load_config
+from mcp_homelab.core.config import (
+    AppConfig,
+    get_config_dir,
+    get_opnsense_credentials,
+    get_proxmox_token,
+    load_config,
+)
 from mcp_homelab.setup.ssh_helpers import SSHConnectError, connect, detect_capabilities
 
 
@@ -38,16 +43,17 @@ def _check_node(name: str, ip: str, user: str, key_path: str) -> dict[str, str]:
 
 def _check_proxmox(config: AppConfig) -> str:
     """Test Proxmox API connectivity. Returns status string."""
+    assert config.proxmox is not None
     try:
         import httpx
 
-        token_id = os.environ.get("PROXMOX_TOKEN_ID", "")
-        token_secret = os.environ.get("PROXMOX_TOKEN_SECRET", "")
-        if not token_id or not token_secret:
+        try:
+            token = get_proxmox_token()
+        except KeyError:
             return "✗ missing API token in .env"
 
         url = f"https://{config.proxmox.host}:{config.proxmox.port}/api2/json/version"
-        headers = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
+        headers = {"Authorization": f"PVEAPIToken={token.token_id}={token.token_secret}"}
 
         resp = httpx.get(url, headers=headers, verify=config.proxmox.verify_ssl, timeout=10)
         if resp.status_code == 200:
@@ -60,18 +66,19 @@ def _check_proxmox(config: AppConfig) -> str:
 
 def _check_opnsense(config: AppConfig) -> str:
     """Test OPNsense API connectivity. Returns status string."""
+    assert config.opnsense is not None
     try:
         import httpx
 
-        api_key = os.environ.get("OPNSENSE_API_KEY", "")
-        api_secret = os.environ.get("OPNSENSE_API_SECRET", "")
-        if not api_key or not api_secret:
+        try:
+            creds = get_opnsense_credentials()
+        except KeyError:
             return "✗ missing API credentials in .env"
 
         url = f"https://{config.opnsense.host}/api/dhcpv4/leases/searchLease"
         resp = httpx.get(
             url,
-            auth=(api_key, api_secret),
+            auth=(creds.api_key, creds.api_secret),
             verify=config.opnsense.verify_ssl,
             timeout=10,
         )
@@ -105,8 +112,8 @@ def run_check(config_path: Path | None = None) -> None:
     config = load_config(config_path)
 
     node_count = len(config.hosts)
-    has_proxmox = bool(config.proxmox.host and config.proxmox.host != "0.0.0.0")
-    has_opnsense = bool(config.opnsense.host and config.opnsense.host != "0.0.0.0")
+    has_proxmox = bool(config.proxmox and config.proxmox.host != "0.0.0.0")
+    has_opnsense = bool(config.opnsense and config.opnsense.host != "0.0.0.0")
 
     parts = [f"{node_count} host{'s' if node_count != 1 else ''}"]
     if has_proxmox:

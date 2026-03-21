@@ -385,6 +385,38 @@ def get_opnsense_credentials() -> OPNsenseCredentials:
     return OPNsenseCredentials(os.environ["OPNSENSE_API_KEY"], os.environ["OPNSENSE_API_SECRET"])
 
 
+class OAuthClientCredentials(NamedTuple):
+    client_id: str
+    client_secret: str
+
+
+def get_oauth_client_credentials() -> OAuthClientCredentials | None:
+    """Return OAuth client credentials, or None if not configured."""
+    client_id = os.environ.get("MCP_CLIENT_ID") or None
+    client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
+    if client_id and client_secret:
+        return OAuthClientCredentials(client_id, client_secret)
+    return None
+
+
+def get_allowed_redirect_origins() -> list[str] | None:
+    """Return parsed MCP_ALLOWED_REDIRECT_ORIGINS, or None if not set."""
+    raw = os.environ.get("MCP_ALLOWED_REDIRECT_ORIGINS", "")
+    if not raw.strip():
+        return None
+    return [
+        origin.strip().rstrip("/")
+        for origin in raw.split(",")
+        if origin.strip()
+    ]
+
+
+def get_admin_password_hash() -> str | None:
+    """Return MCP_ADMIN_PASSWORD_HASH, or None if not set."""
+    value = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
+    return value or None
+
+
 # --- Integration availability helpers ---
 
 
