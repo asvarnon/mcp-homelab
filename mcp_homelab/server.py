@@ -10,7 +10,6 @@ Can be run directly (``python server.py``) or via the CLI
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -334,18 +333,18 @@ def _setup_http_transport(config: AppConfig) -> None:
     # Pre-registered OAuth client credentials (set via .env or systemd
     # credentials). Dynamic Client Registration remains enabled so
     # additional clients can self-register.
-    client_id = os.environ.get("MCP_CLIENT_ID") or None
-    client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
-    raw_origins = os.environ.get("MCP_ALLOWED_REDIRECT_ORIGINS", "")
-    allowed_redirect_origins: list[str] | None = None
-    if raw_origins.strip():
-        allowed_redirect_origins = [
-            origin.strip().rstrip("/")
-            for origin in raw_origins.split(",")
-            if origin.strip()
-        ]
+    from mcp_homelab.core.config import (
+        get_oauth_client_credentials,
+        get_allowed_redirect_origins,
+        get_admin_password_hash,
+    )
 
-    if not (client_id and client_secret):
+    oauth_creds = get_oauth_client_credentials()
+    client_id = oauth_creds.client_id if oauth_creds else None
+    client_secret = oauth_creds.client_secret if oauth_creds else None
+    allowed_redirect_origins = get_allowed_redirect_origins()
+
+    if not oauth_creds:
         logger.warning(
             "MCP_CLIENT_ID / MCP_CLIENT_SECRET not set — no static "
             "OAuth client registered.  Only dynamically-registered "
@@ -362,7 +361,7 @@ def _setup_http_transport(config: AppConfig) -> None:
     )
 
     # ── Admin login gate ──────────────────────────────────────────
-    admin_hash = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
+    admin_hash = get_admin_password_hash()
     login_url: str | None = f"{public_url.rstrip('/')}/login" if admin_hash else None
 
     provider = HomelabOAuthProvider(
