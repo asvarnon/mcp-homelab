@@ -1,7 +1,7 @@
 ---
 name: "Documentation Agent"
 description: "Use when: updating README, guides, deployment docs, design docs, backlog files, archiving completed docs, cleaning stale references, writing operational runbooks, updating CONTRIBUTING.md, auditing doc accuracy against current code state"
-tools: [read, search, edit, todo, issues]
+tools: [read, search, edit, todo]
 model: "Claude Opus 4.6"
 ---
 
