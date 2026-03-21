@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import re
+from collections.abc import Awaitable, Callable
 from typing import Any
 from typing_extensions import TypedDict
 
@@ -87,6 +88,40 @@ class ContainerInfo(TypedDict):
 
 
 _ssh = SSHManager()
+
+
+# ---------------------------------------------------------------------------
+# SSH command constants — OS-specific queries
+# ---------------------------------------------------------------------------
+
+LINUX_STATUS_COMMANDS: list[str] = [
+    "uptime -p",
+    "top -bn1 | grep '%Cpu'",
+    "free -m | grep '^Mem:'",
+    "df -BG",
+]
+
+FREEBSD_STATUS_COMMANDS: list[str] = [
+    "uptime",
+    "vmstat 1 2",
+    "(sysctl -n hw.physmem; sysctl -n vm.stats.vm.v_free_count; sysctl -n hw.pagesize)",
+    "df -g",
+]
+
+LINUX_HWSPEC_COMMANDS: list[str] = [
+    "lscpu",
+    "cat /proc/meminfo | head -5",
+    "lsblk -d -o NAME,SIZE,TYPE,MODEL --noheadings",
+    "(systemd-detect-virt || true)",
+    "(sudo -n dmidecode --type 17 2>/dev/null || true)",
+]
+
+FREEBSD_HWSPEC_COMMANDS: list[str] = [
+    "(sysctl -n hw.model; sysctl -n hw.ncpu; sysctl -n hw.machine)",
+    "sysctl -n hw.physmem",
+    "sysctl -n kern.disks",
+    "(sysctl -n kern.vm_guest 2>/dev/null || echo none)",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -400,37 +435,33 @@ async def list_nodes() -> list[NodeSummary]:
 async def get_node_status(hostname: str) -> NodeStatus:
     """Return uptime, CPU%, RAM usage, and disk usage for a node."""
     host_os = _get_host_os(hostname)
+    dispatch = _NODE_STATUS_DISPATCH[host_os]
+    return await dispatch(hostname)
 
-    if host_os == "freebsd":
-        commands = [
-            "uptime",
-            "vmstat 1 2",
-            "(sysctl -n hw.physmem; sysctl -n vm.stats.vm.v_free_count; sysctl -n hw.pagesize)",
-            "df -g",
-        ]
-        sections = await _compound_ssh_query(hostname, commands)
-        padded = sections + [[] for _ in range(len(commands) - len(sections))]
-        uptime_lines, cpu_lines, mem_lines, disk_lines = padded[:4]
 
-        ram_used, ram_total = _parse_bsd_memory_mb(mem_lines)
-        return {
-            "uptime": _parse_bsd_uptime(uptime_lines),
-            "cpu_percent": _parse_bsd_cpu_percent(cpu_lines),
-            "ram_used_mb": ram_used,
-            "ram_total_mb": ram_total,
-            "filesystems": _parse_bsd_disk_gb(disk_lines),
-        }
+async def _get_node_status_freebsd(hostname: str) -> NodeStatus:
+    """Collect node status metrics from a FreeBSD host."""
+    sections = await _compound_ssh_query(hostname, FREEBSD_STATUS_COMMANDS)
+    padded = sections + [[] for _ in range(len(FREEBSD_STATUS_COMMANDS) - len(sections))]
+    uptime_lines, cpu_lines, mem_lines, disk_lines = padded[:4]
 
-    # Linux (default)
-    commands = ["uptime -p", "top -bn1 | grep '%Cpu'", "free -m | grep '^Mem:'", "df -BG"]
-    sections = await _compound_ssh_query(hostname, commands)
+    ram_used, ram_total = _parse_bsd_memory_mb(mem_lines)
+    return {
+        "uptime": _parse_bsd_uptime(uptime_lines),
+        "cpu_percent": _parse_bsd_cpu_percent(cpu_lines),
+        "ram_used_mb": ram_used,
+        "ram_total_mb": ram_total,
+        "filesystems": _parse_bsd_disk_gb(disk_lines),
+    }
 
-    # Pad so we always have one section per command
-    padded = sections + [[] for _ in range(len(commands) - len(sections))]
+
+async def _get_node_status_linux(hostname: str) -> NodeStatus:
+    """Collect node status metrics from a Linux host."""
+    sections = await _compound_ssh_query(hostname, LINUX_STATUS_COMMANDS)
+    padded = sections + [[] for _ in range(len(LINUX_STATUS_COMMANDS) - len(sections))]
     uptime_lines, cpu_lines, mem_lines, disk_lines = padded[:4]
 
     ram_used, ram_total = _parse_memory_mb(mem_lines)
-
     return {
         "uptime": _parse_uptime(uptime_lines),
         "cpu_percent": _parse_cpu_percent(cpu_lines),
@@ -438,6 +469,12 @@ async def get_node_status(hostname: str) -> NodeStatus:
         "ram_total_mb": ram_total,
         "filesystems": _parse_disk_gb(disk_lines),
     }
+
+
+_NODE_STATUS_DISPATCH: dict[str, Callable[[str], Awaitable[NodeStatus]]] = {
+    "freebsd": _get_node_status_freebsd,
+    "linux": _get_node_status_linux,
+}
 
 
 async def list_containers(hostname: str) -> list[ContainerInfo]:
@@ -612,47 +649,38 @@ def _round_to_consumer_gb(total_mb: int) -> int:
 async def get_hardware_specs(hostname: str) -> HardwareSpecs:
     """Return hardware specification for a node."""
     host_os = _get_host_os(hostname)
+    dispatch = _HWSPEC_DISPATCH[host_os]
+    return await dispatch(hostname)
 
-    if host_os == "freebsd":
-        commands = [
-            "(sysctl -n hw.model; sysctl -n hw.ncpu; sysctl -n hw.machine)",
-            "sysctl -n hw.physmem",
-            "sysctl -n kern.disks",
-            "(sysctl -n kern.vm_guest 2>/dev/null || echo none)",
-        ]
-        sections = await _compound_ssh_query(hostname, commands)
-        padded = sections + [[] for _ in range(len(commands) - len(sections))]
-        cpu_lines, mem_lines, disk_lines, virt_lines = padded[:4]
 
-        cpu_info = _parse_bsd_cpu_info(cpu_lines)
-        virt_type = _parse_virt(virt_lines)
-        ram_total = _parse_bsd_physmem(mem_lines)
+async def _get_hardware_specs_freebsd(hostname: str) -> HardwareSpecs:
+    """Collect hardware specs from a FreeBSD host."""
+    sections = await _compound_ssh_query(hostname, FREEBSD_HWSPEC_COMMANDS)
+    padded = sections + [[] for _ in range(len(FREEBSD_HWSPEC_COMMANDS) - len(sections))]
+    cpu_lines, mem_lines, disk_lines, virt_lines = padded[:4]
 
-        return HardwareSpecs(
-            cpu_model=cpu_info["cpu_model"],
-            cpu_cores=cpu_info["cpu_cores"],
-            cpu_sockets=cpu_info["cpu_sockets"],
-            architecture=cpu_info["architecture"],
-            ram_total_mb=ram_total,
-            ram_display=f"{_round_to_consumer_gb(ram_total)} GB",
-            memory_modules=[],  # dmidecode not attempted (may exist on OPNsense but not queried)
-            disks=_parse_bsd_disks(disk_lines),
-            virtualization=virt_type,
-            is_vm=virt_type != "none",
-        )
+    cpu_info = _parse_bsd_cpu_info(cpu_lines)
+    virt_type = _parse_virt(virt_lines)
+    ram_total = _parse_bsd_physmem(mem_lines)
 
-    # Linux (default)
-    commands = [
-        "lscpu",
-        "cat /proc/meminfo | head -5",
-        "lsblk -d -o NAME,SIZE,TYPE,MODEL --noheadings",
-        "(systemd-detect-virt || true)",
-        "(sudo -n dmidecode --type 17 2>/dev/null || true)",
-    ]
-    sections = await _compound_ssh_query(hostname, commands)
+    return HardwareSpecs(
+        cpu_model=cpu_info["cpu_model"],
+        cpu_cores=cpu_info["cpu_cores"],
+        cpu_sockets=cpu_info["cpu_sockets"],
+        architecture=cpu_info["architecture"],
+        ram_total_mb=ram_total,
+        ram_display=f"{_round_to_consumer_gb(ram_total)} GB",
+        memory_modules=[],
+        disks=_parse_bsd_disks(disk_lines),
+        virtualization=virt_type,
+        is_vm=virt_type != "none",
+    )
 
-    # Pad so we always have one section per command
-    padded = sections + [[] for _ in range(len(commands) - len(sections))]
+
+async def _get_hardware_specs_linux(hostname: str) -> HardwareSpecs:
+    """Collect hardware specs from a Linux host."""
+    sections = await _compound_ssh_query(hostname, LINUX_HWSPEC_COMMANDS)
+    padded = sections + [[] for _ in range(len(LINUX_HWSPEC_COMMANDS) - len(sections))]
     lscpu_lines, meminfo_lines, lsblk_lines, virt_lines, dmi_lines = padded[:5]
 
     cpu_info = _parse_lscpu(lscpu_lines)
@@ -671,3 +699,9 @@ async def get_hardware_specs(hostname: str) -> HardwareSpecs:
         virtualization=virt_type,
         is_vm=virt_type != "none",
     )
+
+
+_HWSPEC_DISPATCH: dict[str, Callable[[str], Awaitable[HardwareSpecs]]] = {
+    "freebsd": _get_hardware_specs_freebsd,
+    "linux": _get_hardware_specs_linux,
+}

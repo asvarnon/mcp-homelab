@@ -14,12 +14,13 @@ from typing_extensions import TypedDict
 
 from mcp_homelab.core.config import load_config, opnsense_configured
 from mcp_homelab.core.opnsense_api import OPNsenseAPIError, OPNsenseClient
+from mcp_homelab.tools import _not_configured_error
 
 _client = OPNsenseClient()
 
-_NOT_CONFIGURED: dict[str, str] = {
-    "error": "OPNsense is not configured. Add an 'opnsense' section to config.yaml and set OPNSENSE_API_KEY / OPNSENSE_API_SECRET in .env."
-}
+_NOT_CONFIGURED: dict[str, str] = _not_configured_error(
+    "OPNsense", "opnsense", "OPNSENSE_API_KEY / OPNSENSE_API_SECRET",
+)
 
 
 async def get_dhcp_leases() -> list[dict[str, Any]]:
