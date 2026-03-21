@@ -36,7 +36,7 @@ class HostConfig(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _sudo_implies_docker(cls, data: dict) -> dict:  # type: ignore[override]
+    def _sudo_implies_docker(cls, data: Any) -> Any:
         """If sudo_docker is set, docker must also be enabled."""
         if isinstance(data, dict) and data.get("sudo_docker") and not data.get("docker"):
             data["docker"] = True

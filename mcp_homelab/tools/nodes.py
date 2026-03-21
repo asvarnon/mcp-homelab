@@ -96,8 +96,8 @@ _ssh = SSHManager()
 
 LINUX_STATUS_COMMANDS: list[str] = [
     "uptime -p",
-    "top -bn1 | grep '%Cpu'",
-    "free -m | grep '^Mem:'",
+    "top -bn1 | grep '%Cpu' || true",
+    "free -m | grep '^Mem:' || true",
     "df -BG",
 ]
 
