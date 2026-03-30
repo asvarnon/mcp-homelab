@@ -34,6 +34,14 @@ class HostConfig(BaseModel):
     type: str | None = None  # optional: baremetal, vm, container
     os: Literal["linux", "freebsd"] = "linux"
 
+    @model_validator(mode="before")
+    @classmethod
+    def _sudo_implies_docker(cls, data: Any) -> Any:
+        """If sudo_docker is set, docker must also be enabled."""
+        if isinstance(data, dict) and data.get("sudo_docker") and not data.get("docker"):
+            data["docker"] = True
+        return data
+
 
 # Backward-compatible alias — existing code that imports NodeConfig still works.
 NodeConfig = HostConfig
@@ -140,12 +148,14 @@ def _warn_file_permissions(path: Path, max_mode: int, label: str) -> None:
         )
 
 
-def load_env() -> None:
+def load_env(env_dir: Path | None = None) -> None:
     """Load the .env file from the config directory.
 
+    If env_dir is provided, load from that directory instead of get_config_dir().
     Must be called before any env-var accessors are used.
     """
-    env_path = get_config_dir() / ".env"
+    base_dir = env_dir if env_dir is not None else get_config_dir()
+    env_path = base_dir / ".env"
     _warn_file_permissions(env_path, 0o600, ".env")
     load_dotenv(env_path)
 
@@ -158,6 +168,8 @@ _CREDENTIAL_KEYS: tuple[str, ...] = (
     "OPNSENSE_API_SECRET",
     "MCP_CLIENT_ID",
     "MCP_CLIENT_SECRET",
+    "MCP_ADMIN_PASSWORD_HASH",
+    "MCP_ALLOWED_REDIRECT_ORIGINS",
 )
 
 
@@ -223,6 +235,36 @@ def load_from_credentials_dir() -> None:
 
 _WILDCARD_HOSTS: frozenset[str] = frozenset({"0.0.0.0", "::", "::0", "0:0:0:0:0:0:0:0"})
 
+_MIN_CREDENTIAL_LEN = 32
+
+
+def _validate_oauth_credentials() -> None:
+    """Validate MCP_CLIENT_ID / MCP_CLIENT_SECRET pairing and length.
+
+    Raises:
+        EnvironmentError: If only one is set, or either is too short.
+    """
+    client_id = os.environ.get("MCP_CLIENT_ID", "")
+    client_secret = os.environ.get("MCP_CLIENT_SECRET", "")
+    has_id = bool(client_id)
+    has_secret = bool(client_secret)
+    if has_id != has_secret:
+        raise EnvironmentError(
+            "MCP_CLIENT_ID and MCP_CLIENT_SECRET must both be set or both be empty. "
+            f"Got: MCP_CLIENT_ID={'set' if has_id else 'empty'}, "
+            f"MCP_CLIENT_SECRET={'set' if has_secret else 'empty'}."
+        )
+    if has_id and len(client_id) < _MIN_CREDENTIAL_LEN:
+        raise EnvironmentError(
+            f"MCP_CLIENT_ID must be at least {_MIN_CREDENTIAL_LEN} characters "
+            f"(got {len(client_id)}). Use a cryptographically random value."
+        )
+    if has_secret and len(client_secret) < _MIN_CREDENTIAL_LEN:
+        raise EnvironmentError(
+            f"MCP_CLIENT_SECRET must be at least {_MIN_CREDENTIAL_LEN} characters "
+            f"(got {len(client_secret)}). Use a cryptographically random value."
+        )
+
 
 def validate_env() -> None:
     """Check that required environment variables are set.
@@ -256,29 +298,7 @@ def validate_env() -> None:
                 "The MCP SDK requires a valid public URL for Host header validation. "
                 "Set server.public_url to the URL clients will use (e.g., 'http://203.0.113.111:8000')."
             )
-
-        # OAuth client credentials: both or neither.
-        client_id = os.environ.get("MCP_CLIENT_ID", "")
-        client_secret = os.environ.get("MCP_CLIENT_SECRET", "")
-        has_id = bool(client_id)
-        has_secret = bool(client_secret)
-        if has_id != has_secret:
-            raise EnvironmentError(
-                "MCP_CLIENT_ID and MCP_CLIENT_SECRET must both be set or both be empty. "
-                f"Got: MCP_CLIENT_ID={'set' if has_id else 'empty'}, "
-                f"MCP_CLIENT_SECRET={'set' if has_secret else 'empty'}."
-            )
-        _MIN_CREDENTIAL_LEN = 32
-        if has_id and len(client_id) < _MIN_CREDENTIAL_LEN:
-            raise EnvironmentError(
-                f"MCP_CLIENT_ID must be at least {_MIN_CREDENTIAL_LEN} characters "
-                f"(got {len(client_id)}). Use a cryptographically random value."
-            )
-        if has_secret and len(client_secret) < _MIN_CREDENTIAL_LEN:
-            raise EnvironmentError(
-                f"MCP_CLIENT_SECRET must be at least {_MIN_CREDENTIAL_LEN} characters "
-                f"(got {len(client_secret)}). Use a cryptographically random value."
-            )
+        _validate_oauth_credentials()
 
     if missing:
         raise EnvironmentError(
@@ -367,6 +387,38 @@ class OPNsenseCredentials(NamedTuple):
 def get_opnsense_credentials() -> OPNsenseCredentials:
     """Returns named (api_key, api_secret)."""
     return OPNsenseCredentials(os.environ["OPNSENSE_API_KEY"], os.environ["OPNSENSE_API_SECRET"])
+
+
+class OAuthClientCredentials(NamedTuple):
+    client_id: str
+    client_secret: str
+
+
+def get_oauth_client_credentials() -> OAuthClientCredentials | None:
+    """Return OAuth client credentials, or None if not configured."""
+    client_id = (os.environ.get("MCP_CLIENT_ID") or "").strip() or None
+    client_secret = (os.environ.get("MCP_CLIENT_SECRET") or "").strip() or None
+    if client_id and client_secret:
+        return OAuthClientCredentials(client_id, client_secret)
+    return None
+
+
+def get_allowed_redirect_origins() -> list[str] | None:
+    """Return parsed MCP_ALLOWED_REDIRECT_ORIGINS, or None if not set."""
+    raw = os.environ.get("MCP_ALLOWED_REDIRECT_ORIGINS", "")
+    if not raw.strip():
+        return None
+    return [
+        origin.strip().rstrip("/")
+        for origin in raw.split(",")
+        if origin.strip()
+    ]
+
+
+def get_admin_password_hash() -> str | None:
+    """Return MCP_ADMIN_PASSWORD_HASH, or None if not set."""
+    value = os.environ.get("MCP_ADMIN_PASSWORD_HASH", "").strip()
+    return value or None
 
 
 # --- Integration availability helpers ---

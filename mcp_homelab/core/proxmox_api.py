@@ -12,31 +12,30 @@ from typing import Any
 
 import httpx
 
+from mcp_homelab.core.api_client import API_TIMEOUT, APIError, HomelabAPIClient
 from mcp_homelab.core.config import get_proxmox_token, load_config
 
 logger = logging.getLogger(__name__)
 
-_API_TIMEOUT = 15  # seconds — all HTTP requests
 
-
-class ProxmoxAPIError(Exception):
+class ProxmoxAPIError(APIError):
     """Raised when the Proxmox API returns a non-2xx response."""
 
     def __init__(self, status_code: int, body: str) -> None:
-        self.status_code = status_code
-        self.body = body
-        super().__init__(f"Proxmox API error {status_code}: {body}")
+        super().__init__(status_code, body, label="Proxmox")
 
 
-class ProxmoxClient:
+class ProxmoxClient(HomelabAPIClient):
     """Async HTTP client for the Proxmox VE REST API.
 
     Connections are lazy — the httpx client is created on first API call.
     Node names are auto-discovered on first use and cached.
     """
 
+    _label = "Proxmox"
+
     def __init__(self) -> None:
-        self._client: httpx.AsyncClient | None = None
+        super().__init__()
         self._nodes: list[str] | None = None
 
     def _build_client(self) -> httpx.AsyncClient:
@@ -57,70 +56,14 @@ class ProxmoxClient:
                 "Authorization": f"PVEAPIToken={token_id}={token_secret}",
             },
             verify=pve.verify_ssl,
-            timeout=_API_TIMEOUT,
+            timeout=API_TIMEOUT,
         )
 
-    async def _ensure_client(self) -> httpx.AsyncClient:
-        """Return the httpx client, creating it lazily on first call."""
-        if self._client is None:
-            self._client = self._build_client()
-            logger.debug("Proxmox HTTP client created")
-        return self._client
+    def _make_error(self, status_code: int, body: str) -> ProxmoxAPIError:
+        return ProxmoxAPIError(status_code, body)
 
-    async def get(self, path: str) -> Any:
-        """GET request to Proxmox API.
-
-        Args:
-            path: Relative API path, e.g. '/nodes'.
-
-        Returns:
-            Parsed JSON response (the 'data' field if present, else full body).
-
-        Raises:
-            ProxmoxAPIError: On non-2xx responses.
-        """
-        client = await self._ensure_client()
-        try:
-            response = await client.get(path)
-        except httpx.ConnectError as exc:
-            raise ProxmoxAPIError(0, f"Cannot reach Proxmox at {client.base_url}: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            raise ProxmoxAPIError(0, f"Proxmox request timed out ({_API_TIMEOUT}s): {exc}") from exc
-
-        if not response.is_success:
-            raise ProxmoxAPIError(response.status_code, response.text)
-
-        body = response.json()
-        # Proxmox wraps most responses in {"data": ...}
-        if isinstance(body, dict) and "data" in body:
-            return body["data"]
-        return body
-
-    async def post(self, path: str, data: dict | None = None) -> Any:
-        """POST request to Proxmox API.
-
-        Args:
-            path: Relative API path.
-            data: Optional form data to send.
-
-        Returns:
-            Parsed JSON response (the 'data' field if present, else full body).
-
-        Raises:
-            ProxmoxAPIError: On non-2xx responses.
-        """
-        client = await self._ensure_client()
-        try:
-            response = await client.post(path, data=data)
-        except httpx.ConnectError as exc:
-            raise ProxmoxAPIError(0, f"Cannot reach Proxmox at {client.base_url}: {exc}") from exc
-        except httpx.TimeoutException as exc:
-            raise ProxmoxAPIError(0, f"Proxmox request timed out ({_API_TIMEOUT}s): {exc}") from exc
-
-        if not response.is_success:
-            raise ProxmoxAPIError(response.status_code, response.text)
-
-        body = response.json()
+    def _extract_data(self, body: Any) -> Any:
+        """Proxmox wraps most responses in {"data": ...}."""
         if isinstance(body, dict) and "data" in body:
             return body["data"]
         return body
@@ -141,8 +84,5 @@ class ProxmoxClient:
 
     async def close(self) -> None:
         """Close the underlying httpx client."""
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
-            self._nodes = None
-            logger.debug("Proxmox HTTP client closed")
+        self._nodes = None
+        await super().close()
