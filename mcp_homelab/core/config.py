@@ -148,12 +148,14 @@ def _warn_file_permissions(path: Path, max_mode: int, label: str) -> None:
         )
 
 
-def load_env() -> None:
+def load_env(env_dir: Path | None = None) -> None:
     """Load the .env file from the config directory.
 
+    If env_dir is provided, load from that directory instead of get_config_dir().
     Must be called before any env-var accessors are used.
     """
-    env_path = get_config_dir() / ".env"
+    base_dir = env_dir if env_dir is not None else get_config_dir()
+    env_path = base_dir / ".env"
     _warn_file_permissions(env_path, 0o600, ".env")
     load_dotenv(env_path)
 

@@ -27,6 +27,7 @@ from mcp_homelab.core.config import (
     get_config_dir,
     get_oauth_client_credentials,
     load_config,
+    load_env,
     load_from_credentials_dir,
     opnsense_configured,
     proxmox_configured,
@@ -162,6 +163,31 @@ class TestGetConfigDir:
         second = get_config_dir()
 
         assert first != second
+
+
+# ===========================================================================
+# load_env
+# ===========================================================================
+
+
+class TestLoadEnv:
+    def test_uses_explicit_env_dir(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        default_dir = tmp_path / "default"
+        explicit_dir = tmp_path / "explicit"
+        default_dir.mkdir()
+        explicit_dir.mkdir()
+
+        (default_dir / ".env").write_text("TEST_LOAD_ENV_DIR=default\n", encoding="utf-8")
+        (explicit_dir / ".env").write_text("TEST_LOAD_ENV_DIR=explicit\n", encoding="utf-8")
+
+        monkeypatch.setenv("MCP_HOMELAB_CONFIG_DIR", str(default_dir))
+        monkeypatch.delenv("TEST_LOAD_ENV_DIR", raising=False)
+
+        load_env(explicit_dir)
+
+        assert os.environ["TEST_LOAD_ENV_DIR"] == "explicit"
 
 
 # ===========================================================================

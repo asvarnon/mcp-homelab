@@ -113,7 +113,7 @@ def run_check(config_path: Path | None = None) -> None:
 
     # Load .env so API credentials are available
     from mcp_homelab.core.config import load_env
-    load_env()
+    load_env(config_path.parent)
 
     config = load_config(config_path)
 
