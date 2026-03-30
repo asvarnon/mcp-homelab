@@ -31,6 +31,31 @@ Invoke the **Codex Agent** (subagent) for:
 - Refactoring code (module splits, import reorganization, etc.)
 - Any task where you'd be writing more than ~10 lines of Python
 
+### When to Delegate to Review Agent
+
+Invoke the **Review Agent** (subagent) for:
+- Any PR containing Python changes before merge
+- Evaluating a new module or subsystem for extensibility and pattern compliance
+- Spot-checking layer separation after a refactor
+- Auditing Codex output when the change touches core abstractions (ssh.py, config.py, tool signatures)
+
+The Review Agent is **not optional on PRs with new tool implementations or core changes.** It is optional for trivial changes (single type annotation fix, test-only changes with no logic).
+
+### When to Delegate to Security Agent
+
+Invoke the **Security Agent** (subagent) for:
+- Any change touching auth, SSH config, API keys, transport layer
+- New network exposure (new port, new endpoint, new host type)
+- Before merging any PR that changes `core/ssh.py`, `core/proxmox_api.py`, `core/opnsense_api.py`
+
+### Standard PR Review Pipeline
+
+For non-trivial PRs, the standard pipeline is:
+1. **Codex Agent** — implements and self-reviews
+2. **Review Agent** — engineering quality (patterns, types, scalability)
+3. **Security Agent** — if the change touches auth/transport/secrets
+4. **You (Claude)** — architectural alignment, design-principle adherence, final merge decision
+
 ### When NOT to Delegate
 
 Handle these yourself:
