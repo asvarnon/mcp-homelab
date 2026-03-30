@@ -43,13 +43,17 @@ def _check_node(name: str, ip: str, user: str, key_path: str) -> dict[str, str]:
 
 def _check_proxmox(config: AppConfig) -> str:
     """Test Proxmox API connectivity. Returns status string."""
-    assert config.proxmox is not None
+    if config.proxmox is None:
+        return "✗ not configured"
     try:
         import httpx
 
         try:
             token = get_proxmox_token()
         except KeyError:
+            return "✗ missing API token in .env"
+
+        if not token.token_id or not token.token_secret:
             return "✗ missing API token in .env"
 
         url = f"https://{config.proxmox.host}:{config.proxmox.port}/api2/json/version"
@@ -66,13 +70,17 @@ def _check_proxmox(config: AppConfig) -> str:
 
 def _check_opnsense(config: AppConfig) -> str:
     """Test OPNsense API connectivity. Returns status string."""
-    assert config.opnsense is not None
+    if config.opnsense is None:
+        return "✗ not configured"
     try:
         import httpx
 
         try:
             creds = get_opnsense_credentials()
         except KeyError:
+            return "✗ missing API credentials in .env"
+
+        if not creds.api_key or not creds.api_secret:
             return "✗ missing API credentials in .env"
 
         url = f"https://{config.opnsense.host}/api/dhcpv4/leases/searchLease"
@@ -112,8 +120,12 @@ def run_check(config_path: Path | None = None) -> None:
     config = load_config(config_path)
 
     node_count = len(config.hosts)
-    has_proxmox = bool(config.proxmox and config.proxmox.host != "0.0.0.0")
-    has_opnsense = bool(config.opnsense and config.opnsense.host != "0.0.0.0")
+    has_proxmox = bool(
+        config.proxmox and config.proxmox.host and config.proxmox.host != "0.0.0.0"
+    )
+    has_opnsense = bool(
+        config.opnsense and config.opnsense.host and config.opnsense.host != "0.0.0.0"
+    )
 
     parts = [f"{node_count} host{'s' if node_count != 1 else ''}"]
     if has_proxmox:

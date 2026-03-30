@@ -17,12 +17,16 @@ import pytest
 from mcp_homelab.core.config import (
     AppConfig,
     HostConfig,
+    OAuthClientCredentials,
     OPNsenseConfig,
     ProxmoxConfig,
     _CREDENTIAL_KEYS,
     _warn_file_permissions,
     bootstrap_config_dir,
+    get_admin_password_hash,
+    get_allowed_redirect_origins,
     get_config_dir,
+    get_oauth_client_credentials,
     load_config,
     load_from_credentials_dir,
     opnsense_configured,
@@ -674,3 +678,136 @@ class TestLoadFromCredentialsDir:
             "Failed to read credential file" in r.message
             for r in caplog.records
         )
+
+
+# ===========================================================================
+# Env-Var Accessor Functions
+# ===========================================================================
+
+
+class TestGetOAuthClientCredentials:
+    """get_oauth_client_credentials() parsing and None behavior."""
+
+    def test_returns_credentials_when_both_set(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_CLIENT_ID", "my-id")
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "my-secret")
+        result = get_oauth_client_credentials()
+        assert result is not None
+        assert result.client_id == "my-id"
+        assert result.client_secret == "my-secret"
+
+    def test_returns_none_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        assert get_oauth_client_credentials() is None
+
+    def test_returns_none_when_empty_strings(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_CLIENT_ID", "")
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "")
+        assert get_oauth_client_credentials() is None
+
+    def test_returns_none_when_only_id_set(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_CLIENT_ID", "my-id")
+        monkeypatch.delenv("MCP_CLIENT_SECRET", raising=False)
+        assert get_oauth_client_credentials() is None
+
+    def test_returns_none_when_only_secret_set(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "my-secret")
+        assert get_oauth_client_credentials() is None
+
+
+class TestGetAllowedRedirectOrigins:
+    """get_allowed_redirect_origins() parsing and None behavior."""
+
+    def test_returns_none_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("MCP_ALLOWED_REDIRECT_ORIGINS", raising=False)
+        assert get_allowed_redirect_origins() is None
+
+    def test_returns_none_when_empty(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ALLOWED_REDIRECT_ORIGINS", "")
+        assert get_allowed_redirect_origins() is None
+
+    def test_returns_none_when_whitespace_only(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ALLOWED_REDIRECT_ORIGINS", "   ")
+        assert get_allowed_redirect_origins() is None
+
+    def test_parses_single_origin(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ALLOWED_REDIRECT_ORIGINS", "http://localhost:3000")
+        assert get_allowed_redirect_origins() == ["http://localhost:3000"]
+
+    def test_parses_multiple_origins(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv(
+            "MCP_ALLOWED_REDIRECT_ORIGINS",
+            "http://localhost:3000, https://example.com",
+        )
+        assert get_allowed_redirect_origins() == [
+            "http://localhost:3000",
+            "https://example.com",
+        ]
+
+    def test_strips_trailing_slashes(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ALLOWED_REDIRECT_ORIGINS", "http://localhost:3000/")
+        assert get_allowed_redirect_origins() == ["http://localhost:3000"]
+
+    def test_skips_empty_entries_from_trailing_comma(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ALLOWED_REDIRECT_ORIGINS", "http://localhost:3000,,")
+        assert get_allowed_redirect_origins() == ["http://localhost:3000"]
+
+
+class TestGetAdminPasswordHash:
+    """get_admin_password_hash() parsing and None behavior."""
+
+    def test_returns_none_when_unset(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.delenv("MCP_ADMIN_PASSWORD_HASH", raising=False)
+        assert get_admin_password_hash() is None
+
+    def test_returns_none_when_empty(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ADMIN_PASSWORD_HASH", "")
+        assert get_admin_password_hash() is None
+
+    def test_returns_none_when_whitespace_only(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ADMIN_PASSWORD_HASH", "   ")
+        assert get_admin_password_hash() is None
+
+    def test_returns_stripped_hash(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ADMIN_PASSWORD_HASH", "  $2b$12$abc123  ")
+        assert get_admin_password_hash() == "$2b$12$abc123"
+
+    def test_returns_hash_when_set(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_ADMIN_PASSWORD_HASH", "$2b$12$realhashedvalue")
+        assert get_admin_password_hash() == "$2b$12$realhashedvalue"
