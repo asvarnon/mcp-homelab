@@ -112,10 +112,8 @@ def run_check(config_path: Path | None = None) -> None:
         return
 
     # Load .env so API credentials are available
-    from dotenv import load_dotenv
-    env_path = config_path.parent / ".env"
-    if env_path.exists():
-        load_dotenv(env_path)
+    from mcp_homelab.core.config import load_env
+    load_env()
 
     config = load_config(config_path)
 

@@ -15,7 +15,13 @@ from pathlib import Path
 
 # Bootstrap config dir from server.py location so MCP clients
 # that spawn from a foreign cwd can find config.yaml and .env.
-from mcp_homelab.core.config import AppConfig, bootstrap_config_dir
+from mcp_homelab.core.config import (
+    AppConfig,
+    bootstrap_config_dir,
+    get_admin_password_hash,
+    get_allowed_redirect_origins,
+    get_oauth_client_credentials,
+)
 bootstrap_config_dir(Path(__file__).resolve().parent.parent)
 
 logger = logging.getLogger(__name__)
@@ -333,12 +339,6 @@ def _setup_http_transport(config: AppConfig) -> None:
     # Pre-registered OAuth client credentials (set via .env or systemd
     # credentials). Dynamic Client Registration remains enabled so
     # additional clients can self-register.
-    from mcp_homelab.core.config import (
-        get_oauth_client_credentials,
-        get_allowed_redirect_origins,
-        get_admin_password_hash,
-    )
-
     oauth_creds = get_oauth_client_credentials()
     client_id = oauth_creds.client_id if oauth_creds else None
     client_secret = oauth_creds.client_secret if oauth_creds else None

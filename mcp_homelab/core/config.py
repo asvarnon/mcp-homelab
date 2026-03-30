@@ -166,6 +166,8 @@ _CREDENTIAL_KEYS: tuple[str, ...] = (
     "OPNSENSE_API_SECRET",
     "MCP_CLIENT_ID",
     "MCP_CLIENT_SECRET",
+    "MCP_ADMIN_PASSWORD_HASH",
+    "MCP_ALLOWED_REDIRECT_ORIGINS",
 )
 
 
@@ -392,8 +394,8 @@ class OAuthClientCredentials(NamedTuple):
 
 def get_oauth_client_credentials() -> OAuthClientCredentials | None:
     """Return OAuth client credentials, or None if not configured."""
-    client_id = os.environ.get("MCP_CLIENT_ID") or None
-    client_secret = os.environ.get("MCP_CLIENT_SECRET") or None
+    client_id = (os.environ.get("MCP_CLIENT_ID") or "").strip() or None
+    client_secret = (os.environ.get("MCP_CLIENT_SECRET") or "").strip() or None
     if client_id and client_secret:
         return OAuthClientCredentials(client_id, client_secret)
     return None

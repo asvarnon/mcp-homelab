@@ -17,7 +17,6 @@ import pytest
 from mcp_homelab.core.config import (
     AppConfig,
     HostConfig,
-    OAuthClientCredentials,
     OPNsenseConfig,
     ProxmoxConfig,
     _CREDENTIAL_KEYS,
@@ -724,6 +723,13 @@ class TestGetOAuthClientCredentials:
     ) -> None:
         monkeypatch.delenv("MCP_CLIENT_ID", raising=False)
         monkeypatch.setenv("MCP_CLIENT_SECRET", "my-secret")
+        assert get_oauth_client_credentials() is None
+
+    def test_returns_none_when_whitespace_only(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("MCP_CLIENT_ID", "   ")
+        monkeypatch.setenv("MCP_CLIENT_SECRET", "   ")
         assert get_oauth_client_credentials() is None
 
 
