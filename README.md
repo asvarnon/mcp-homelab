@@ -122,6 +122,8 @@ sudo visudo -cf /etc/sudoers.d/docker-nopasswd   # must print "parsed OK"
 
 If the SSH user is already in the `docker` group, set `sudo_docker: false` (the default) and no sudoers changes are needed.
 
+> **Common pitfall:** Do NOT restrict the sudoers rule to specific docker subcommands (e.g. `/usr/bin/docker ps, /usr/bin/docker exec *`). Sudoers treats arguments as an exact match — `docker ps` won't match `docker ps --format '{{json .}}'`, which is what the MCP tools actually run. Use `/usr/bin/docker` (the binary path alone, no subcommands) to allow all docker operations with any arguments.
+
 #### Hardware memory details (optional)
 
 `generate_context` and `scan_infrastructure` gather hardware specs via SSH. Most data comes from unprivileged commands (`lscpu`, `/proc/meminfo`, `lsblk`), but **per-DIMM memory details** (type, speed, manufacturer) require `dmidecode`, which needs root access.
@@ -136,6 +138,19 @@ sudo visudo -cf /etc/sudoers.d/dmidecode-nopasswd   # must print "parsed OK"
 ```
 
 Without this, everything else still works — the memory modules section is simply omitted from generated docs.
+
+#### Combined sudoers file (recommended)
+
+For nodes that need both `sudo_docker: true` and hardware memory details, you can combine both rules into a single file:
+
+```bash
+# On the remote node:
+cat <<EOF | sudo tee /etc/sudoers.d/mcp-homelab
+<username> ALL=(root) NOPASSWD: /usr/bin/docker, /usr/sbin/dmidecode
+EOF
+sudo chmod 440 /etc/sudoers.d/mcp-homelab
+sudo visudo -cf /etc/sudoers.d/mcp-homelab   # must print "parsed OK"
+```
 
 ### MCP client connection
 
